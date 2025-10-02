@@ -173,7 +173,7 @@ func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 	pkey := conn.conn.Permissions.Extensions[sshPublicKeyPermission]
 
 	addr := conn.conn.RemoteAddr().String()
-	fmt.Printf("[%s] %s %s\n", addr, username, pkey)
+	fmt.Printf("[%s] New connection from: %s %s\n", addr, username, pkey)
 
 	user, err := srv.service.User.Identify(username, pkey)
 	if err != nil {
@@ -189,7 +189,7 @@ func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 		_, _ = fmt.Fprintf(conn.session, "Hello, %s! You have been just registered.\r\n", username)
 	}
 
-	fmt.Printf("[%s] [%s] logged in\n", addr, user.ID)
+	fmt.Printf("[%s] [%s] Logged in\n", addr, user.ID)
 
 	if user.TG == 0 {
 		user, err = srv.service.User.UpdateTGLink(user.ID)
