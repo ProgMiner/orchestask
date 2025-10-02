@@ -218,6 +218,7 @@ func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 		_, _ = fmt.Fprint(conn.session, "Great!\r\n")
 	}
 
+	justInited := false
 	if user.Container == "" {
 		_, _ = fmt.Fprint(conn.session, "Initializing container for you...\r\n")
 
@@ -235,6 +236,8 @@ func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 		if err != nil {
 			return fmt.Errorf("unable to set container ID: %w", err)
 		}
+
+		justInited = true
 	}
 
 	containerIP, err := srv.service.Docker.EnsureContainer(ctx, user.Container)
@@ -244,13 +247,27 @@ func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 
 	fmt.Printf("[%s] [%s] Connecting to container IP %s\n", addr, user.ID, containerIP)
 
-	containerAddr := fmt.Sprintf("%s:22", containerIP)
-	clientConn, clientChans, clientReqs, err := srv.connectContainer(containerAddr, conn.session)
-	if err != nil {
-		return fmt.Errorf("unable to connect container by SSH: %w", err)
+	retries := 1
+	if justInited {
+		retries = 3
 	}
 
-	return srv.redirectConn(conn, clientConn, clientChans, clientReqs)
+	containerAddr := fmt.Sprintf("%s:22", containerIP)
+
+	var connectionErr error
+	for range retries {
+		clientConn, clientChans, clientReqs, err := srv.connectContainer(containerAddr, conn.session)
+		if err != nil {
+			connectionErr = err
+
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		return srv.redirectConn(conn, clientConn, clientChans, clientReqs)
+	}
+
+	return fmt.Errorf("unable to connect container by SSH: %w", connectionErr)
 }
 
 func (srv *sshServer) connectContainer(
