@@ -92,34 +92,6 @@ func makeService(ctx context.Context, storage *storage.Storage) (*service.Servic
 	return service, nil
 }
 
-/*
-func runServer(ctx context.Context, listener net.Listener) error {
-	srv := http.Server{
-		BaseContext: func(_ net.Listener) context.Context {
-			return ctx
-		},
-	}
-
-	srvClosingErr := make(chan error)
-	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-		<-sig
-
-		fmt.Printf("Shutting down...\n")
-		srvClosingErr <- srv.Shutdown(context.Background())
-	}()
-
-	err := srv.Serve(listener)
-	if err == http.ErrServerClosed {
-		// wait for srv.Shutdown here
-		err = <-srvClosingErr
-	}
-
-	return err
-}
-*/
-
 func main() {
 	code, err := _main()
 	if err != "" {
