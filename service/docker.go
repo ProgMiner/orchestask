@@ -21,7 +21,7 @@ type Docker struct {
 
 const (
 	dockerContainerNanoCPUs    = 1_000_000_000    // 1 CPU
-	dockerContainerMemoryBytes = 24 * 1024 * 1024 // 24 MiB
+	dockerContainerMemoryBytes = 48 * 1024 * 1024 // 48 MiB
 )
 
 func NewDocker(ctx context.Context, image string) (*Docker, error) {
