@@ -38,21 +38,26 @@ func NewDocker(ctx context.Context, image string) (*Docker, error) {
 			return nil, fmt.Errorf("no Docker images found for \"%s\"", image)
 		}
 
-		images := make([]string, len(res))
-		for i, img := range res {
-			images[i] = img.ID
+		images := make([]string, 0, len(res))
+		for _, img := range res {
+			if len(img.RepoTags) == 0 {
+				fmt.Fprintf(os.Stderr, "Skipping image %s without tags\n", img.ID)
+			}
+
+			images = append(images, img.RepoTags[0])
 		}
 
+		fmt.Printf("Going to use the following list of images: %v\n", images)
 		return &Docker{images}, nil
 	})
 }
 
-func (service *Docker) InitContainer(ctx context.Context, hostname string) (string, error) {
+func (service *Docker) InitContainer(ctx context.Context, hostname string) (string, string, error) {
+	type resType struct{ image, id string }
+
 	image := service.images[rand.Intn(len(service.images))]
 
-	fmt.Printf("[%s] Pick random image: %s\n", hostname, image)
-
-	return withDockerClient(func(client *dockerClient.Client) (string, error) {
+	res, err := withDockerClient(func(client *dockerClient.Client) (resType, error) {
 		create, err := client.ContainerCreate(
 			ctx,
 			&dockerContainer.Config{
@@ -71,15 +76,17 @@ func (service *Docker) InitContainer(ctx context.Context, hostname string) (stri
 		)
 
 		if err != nil {
-			return "", err
+			return resType{}, err
 		}
 
 		for _, warn := range create.Warnings {
 			fmt.Fprintf(os.Stderr, "[%s] [%s] Warning: %s\n", hostname, create.ID, warn)
 		}
 
-		return create.ID, nil
+		return resType{image, create.ID}, nil
 	})
+
+	return res.image, res.id, err
 }
 
 func (service *Docker) EnsureContainer(ctx context.Context, id string) (string, error) {

@@ -115,7 +115,11 @@ func (storage *Storage) saveFile(dir string, id model.ID, data any) error {
 		}
 	}()
 
-	if err := json.NewEncoder(file).Encode(data); err != nil {
+	enc := json.NewEncoder(file)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "\t")
+
+	if err := enc.Encode(data); err != nil {
 		return fmt.Errorf("unable to encode JSON (%s): %w", path, err)
 	}
 

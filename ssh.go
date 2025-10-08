@@ -226,15 +226,23 @@ func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 			hostname = user.SSHUsername
 		}
 
-		containerID, err := srv.service.Docker.InitContainer(ctx, hostname)
+		containerImage, containerID, err := srv.service.Docker.InitContainer(ctx, hostname)
 		if err != nil {
 			return fmt.Errorf("unable to initialize container: %w", err)
 		}
 
-		user, err = srv.service.User.UpdateContainer(user.ID, containerID)
+		user, err = srv.service.User.UpdateContainer(user.ID, containerImage, containerID)
 		if err != nil {
 			return fmt.Errorf("unable to set container ID: %w", err)
 		}
+
+		fmt.Printf(
+			"[%s] [%s] Initialized container from image \"%s\": %s\n",
+			addr,
+			user.ID,
+			containerImage,
+			containerID,
+		)
 	}
 
 	containerIP, err := srv.service.Docker.EnsureContainer(ctx, user.Container)

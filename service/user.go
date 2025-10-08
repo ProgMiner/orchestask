@@ -57,7 +57,7 @@ func (service *User) Register(username, pkey string) (*model.User, error) {
 	return service.storage.Save(&model.User{SSHUsername: username, SSHPKey: pkey})
 }
 
-func (service *User) UpdateContainer(id model.ID, container string) (*model.User, error) {
+func (service *User) UpdateContainer(id model.ID, image, container string) (*model.User, error) {
 	user, err := service.storage.FindByID(id)
 	if err != nil {
 		return nil, err
@@ -67,7 +67,9 @@ func (service *User) UpdateContainer(id model.ID, container string) (*model.User
 		return nil, NoUserErr
 	}
 
+	user.ContainerImage = image
 	user.Container = container
+
 	return service.storage.Save(user)
 }
 
