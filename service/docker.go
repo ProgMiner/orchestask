@@ -52,10 +52,12 @@ func NewDocker(ctx context.Context, image string) (*Docker, error) {
 	})
 }
 
-func (service *Docker) InitContainer(ctx context.Context, hostname string) (string, string, error) {
+func (service *Docker) InitContainer(ctx context.Context, hostname, image string) (string, string, error) {
 	type resType struct{ image, id string }
 
-	image := service.images[rand.Intn(len(service.images))]
+	if image == "" {
+		image = service.images[rand.Intn(len(service.images))]
+	}
 
 	res, err := withDockerClient(func(client *dockerClient.Client) (resType, error) {
 		create, err := client.ContainerCreate(

@@ -226,7 +226,7 @@ func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 			hostname = user.SSHUsername
 		}
 
-		containerImage, containerID, err := srv.service.Docker.InitContainer(ctx, hostname)
+		containerImage, containerID, err := srv.service.Docker.InitContainer(ctx, hostname, user.ContainerImage)
 		if err != nil {
 			return fmt.Errorf("unable to initialize container: %w", err)
 		}
