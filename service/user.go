@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 import (
@@ -13,12 +14,14 @@ import (
 import (
 	"bypm.ru/orchestask/model"
 	"bypm.ru/orchestask/storage"
+	"bypm.ru/orchestask/util"
 )
 
 type User struct {
 	storage *storage.User
 
-	tgWaiters map[model.ID]chan struct{}
+	tgWaiters      map[model.ID]chan struct{}
+	tgWaitersMutex sync.Mutex
 }
 
 var (
@@ -97,11 +100,16 @@ func (service *User) WaitTGAttached(ctx context.Context, id model.ID) (*model.Us
 		return nil, NoUserErr
 	}
 
-	waiter, ok := service.tgWaiters[id]
-	if !ok {
-		waiter = make(chan struct{})
-		service.tgWaiters[id] = waiter
-	}
+	waiter, _ := util.Synchronized(&service.tgWaitersMutex, func() (<-chan struct{}, struct{}) {
+		waiter, ok := service.tgWaiters[id]
+
+		if !ok {
+			waiter = make(chan struct{})
+			service.tgWaiters[id] = waiter
+		}
+
+		return waiter, struct{}{}
+	})
 
 	select {
 	case <-ctx.Done():
@@ -140,9 +148,18 @@ func (service *User) AttachTG(
 		return nil, err
 	}
 
-	if waiter, ok := service.tgWaiters[user.ID]; ok {
+	waiter, _ := util.Synchronized(&service.tgWaitersMutex, func() (chan struct{}, struct{}) {
+		waiter, ok := service.tgWaiters[user.ID]
+
+		if ok {
+			delete(service.tgWaiters, user.ID)
+		}
+
+		return waiter, struct{}{}
+	})
+
+	if waiter != nil {
 		close(waiter)
-		delete(service.tgWaiters, user.ID)
 	}
 
 	return user, nil
