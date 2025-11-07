@@ -18,7 +18,6 @@ import (
 )
 
 import (
-	// "bypm.ru/orchestask/storage"
 	"bypm.ru/orchestask/service"
 )
 
@@ -330,11 +329,9 @@ loop:
 				break loop
 			}
 
-			fmt.Printf("forward channel: %s\n", ch.ChannelType())
 			res.forwardChans = append(res.forwardChans, ch)
 
 		case r := <-reqs:
-			fmt.Printf("forward request: %s\n", r.Type)
 			res.forwardReqs = append(res.forwardReqs, r)
 
 		case <-time.After(10 * time.Second):
@@ -377,7 +374,7 @@ func (conn *sshConn) rejectAll(wg *sync.WaitGroup) {
 	}()
 }
 
-// TODO: error collection
+// TODO: error collecting
 func (srv *sshServer) redirectConn(
 	conn *sshConn,
 	connTo ssh.Conn,
