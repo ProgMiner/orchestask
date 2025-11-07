@@ -2,10 +2,12 @@ package storage
 
 import (
 	"fmt"
+	"sync"
 )
 
 import (
 	"bypm.ru/orchestask/model"
+	"bypm.ru/orchestask/util"
 )
 
 type SSHUsernamePKey struct {
@@ -18,6 +20,7 @@ type User struct {
 	idIndex              map[model.ID]struct{}
 	sshUsernamePKeyIndex map[SSHUsernamePKey]model.ID
 	tgLinkIndex          map[string]model.ID
+	indexMutex           sync.Mutex
 }
 
 const (
@@ -40,20 +43,26 @@ func (storage *Storage) User() (*User, error) {
 }
 
 func (storage *User) ExistsByID(id model.ID) (bool, error) {
-	_, ok := storage.idIndex[id]
-	return ok, nil
+	return util.Synchronized(&storage.indexMutex, func() (bool, error) {
+		_, ok := storage.idIndex[id]
+		return ok, nil
+	})
 }
 
 func (storage *User) FindByID(id model.ID) (*model.User, error) {
-	if _, ok := storage.idIndex[id]; !ok {
-		return nil, nil
+	if ok, err := storage.ExistsByID(id); !ok || err != nil {
+		return nil, err
 	}
 
 	return storage.readUser(id)
 }
 
 func (storage *User) FindByUsernameAndPKey(username, pkey string) (*model.User, error) {
-	id, ok := storage.sshUsernamePKeyIndex[SSHUsernamePKey{username, pkey}]
+	id, ok := util.Synchronized(&storage.indexMutex, func() (model.ID, bool) {
+		id, ok := storage.sshUsernamePKeyIndex[SSHUsernamePKey{username, pkey}]
+		return id, ok
+	})
+
 	if !ok {
 		return nil, nil
 	}
@@ -62,7 +71,11 @@ func (storage *User) FindByUsernameAndPKey(username, pkey string) (*model.User, 
 }
 
 func (storage *User) FindByTGLink(tgLink string) (*model.User, error) {
-	id, ok := storage.tgLinkIndex[tgLink]
+	id, ok := util.Synchronized(&storage.indexMutex, func() (model.ID, bool) {
+		id, ok := storage.tgLinkIndex[tgLink]
+		return id, ok
+	})
+
 	if !ok {
 		return nil, nil
 	}
@@ -75,16 +88,18 @@ func (storage *User) Save(user *model.User) (*model.User, error) {
 		user.ID = model.MakeID(fmt.Sprintf("%s-%s.json", user.SSHUsername, user.SSHPKey))
 	}
 
-	if oldUser, _ := storage.readUser(user.ID); oldUser != nil {
-		storage.dropIndexesUser(oldUser)
-	}
+	return util.Synchronized(&storage.indexMutex, func() (*model.User, error) {
+		if oldUser, _ := storage.readUser(user.ID); oldUser != nil {
+			storage.dropIndexesUser(oldUser)
+		}
 
-	if err := storage.saveUser(user); err != nil {
-		return nil, err
-	}
+		if err := storage.saveUser(user); err != nil {
+			return nil, err
+		}
 
-	storage.initIndexesUser(user)
-	return user, nil
+		storage.initIndexesUser(user)
+		return user, nil
+	})
 }
 
 func (storage *User) initIndexes(id model.ID) error {
