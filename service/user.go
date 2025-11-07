@@ -76,7 +76,7 @@ func (service *User) UpdateContainer(id model.ID, image, container string) (*mod
 	return service.storage.Save(user)
 }
 
-func (service *User) UpdateTGLink(id model.ID) (*model.User, error) {
+func (service *User) MakeTGLink(id model.ID) (*model.User, error) {
 	user, err := service.storage.FindByID(id)
 	if err != nil {
 		return nil, err
@@ -86,8 +86,12 @@ func (service *User) UpdateTGLink(id model.ID) (*model.User, error) {
 		return nil, NoUserErr
 	}
 
-	user.TGLink = uuid.NewString()
-	return service.storage.Save(user)
+	if user.TGLink == "" {
+		user.TGLink = uuid.NewString()
+		return service.storage.Save(user)
+	}
+
+	return user, nil
 }
 
 func (service *User) WaitTGAttached(ctx context.Context, id model.ID) (*model.User, error) {

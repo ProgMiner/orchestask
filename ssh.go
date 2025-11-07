@@ -167,6 +167,7 @@ func (srv *sshServer) _handleConn(ctx context.Context, wg *sync.WaitGroup, conn 
 }
 
 func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, conn *sshConn) error {
+	// TODO: add some kind of transaction on user...
 
 	username := conn.conn.User()
 	pkey := conn.conn.Permissions.Extensions[sshPublicKeyPermission]
@@ -191,7 +192,7 @@ func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 	fmt.Printf("[%s] [%s] Logged in\n", addr, user.ID)
 
 	if user.TG == 0 {
-		user, err = srv.service.User.UpdateTGLink(user.ID)
+		user, err = srv.service.User.MakeTGLink(user.ID)
 		if err != nil {
 			return fmt.Errorf("unable to generate TG link: %w", err)
 		}
