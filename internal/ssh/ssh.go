@@ -1,4 +1,4 @@
-package main
+package ssh
 
 import (
 	"context"
@@ -18,14 +18,14 @@ import (
 )
 
 import (
-	"bypm.ru/orchestask/service"
+	"bypm.ru/orchestask/internal/service"
 )
 
 const (
 	sshPublicKeyPermission = "pubkey"
 )
 
-type sshServer struct {
+type SSHServer struct {
 	containerUsername string
 
 	service   *service.Service
@@ -46,11 +46,11 @@ type sshConn struct {
 	sessionReqs    <-chan *ssh.Request
 }
 
-func makeSSHServer(
+func MakeSSHServer(
 	service *service.Service,
 	host, keyFile, containerUsername string,
-) (*sshServer, error) {
-	srv := &sshServer{service: service, containerUsername: containerUsername}
+) (*SSHServer, error) {
+	srv := &SSHServer{service: service, containerUsername: containerUsername}
 
 	privateBytes, err := os.ReadFile(keyFile)
 	if err != nil {
@@ -74,7 +74,7 @@ func makeSSHServer(
 	return srv, nil
 }
 
-func (srv *sshServer) publicKeyCallback(
+func (srv *SSHServer) publicKeyCallback(
 	conn ssh.ConnMetadata,
 	key ssh.PublicKey,
 ) (*ssh.Permissions, error) {
@@ -85,7 +85,7 @@ func (srv *sshServer) publicKeyCallback(
 	return perms, nil
 }
 
-func (srv *sshServer) run(ctx context.Context) error {
+func (srv *SSHServer) Run(ctx context.Context) error {
 	closing := make(chan struct{})
 
 	go func() {
@@ -129,7 +129,7 @@ func (srv *sshServer) run(ctx context.Context) error {
 	}
 }
 
-func (srv *sshServer) handleConn(ctx context.Context, wg *sync.WaitGroup, conn net.Conn) {
+func (srv *SSHServer) handleConn(ctx context.Context, wg *sync.WaitGroup, conn net.Conn) {
 	defer wg.Done()
 
 	if err := srv._handleConn(ctx, wg, conn); err != nil {
@@ -137,7 +137,7 @@ func (srv *sshServer) handleConn(ctx context.Context, wg *sync.WaitGroup, conn n
 	}
 }
 
-func (srv *sshServer) _handleConn(ctx context.Context, wg *sync.WaitGroup, conn net.Conn) (res error) {
+func (srv *SSHServer) _handleConn(ctx context.Context, wg *sync.WaitGroup, conn net.Conn) (res error) {
 	defer func() {
 		if err := recover(); err != nil {
 			res = fmt.Errorf("panic: %v", err)
@@ -166,7 +166,7 @@ func (srv *sshServer) _handleConn(ctx context.Context, wg *sync.WaitGroup, conn 
 	return
 }
 
-func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, conn *sshConn) error {
+func (srv *SSHServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, conn *sshConn) error {
 	// TODO: add some kind of transaction on user...
 
 	username := conn.conn.User()
@@ -271,7 +271,7 @@ func (srv *sshServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 	return fmt.Errorf("unable to connect container by SSH: %w", connectionErr)
 }
 
-func (srv *sshServer) connectContainer(
+func (srv *SSHServer) connectContainer(
 	addr string,
 	w io.Writer,
 ) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
@@ -303,7 +303,7 @@ func (srv *sshServer) connectContainer(
 	return sshConn, chans, reqs, nil
 }
 
-func (srv *sshServer) initSSHConn(
+func (srv *SSHServer) initSSHConn(
 	ctx context.Context,
 	conn *ssh.ServerConn,
 	chans <-chan ssh.NewChannel,
@@ -376,7 +376,7 @@ func (conn *sshConn) rejectAll(wg *sync.WaitGroup) {
 }
 
 // TODO: error collecting
-func (srv *sshServer) redirectConn(
+func (srv *SSHServer) redirectConn(
 	conn *sshConn,
 	connTo ssh.Conn,
 	chans <-chan ssh.NewChannel,
@@ -449,7 +449,7 @@ func (srv *sshServer) redirectConn(
 	return nil
 }
 
-func (srv *sshServer) redirectNewChan(wg *sync.WaitGroup, newChan ssh.NewChannel, conn ssh.Conn) error {
+func (srv *SSHServer) redirectNewChan(wg *sync.WaitGroup, newChan ssh.NewChannel, conn ssh.Conn) error {
 	chan1, reqs1, err := conn.OpenChannel(newChan.ChannelType(), newChan.ExtraData())
 	if err != nil {
 		_ = newChan.Reject(ssh.ConnectionFailed, "unable to connect container")
@@ -469,7 +469,7 @@ func (srv *sshServer) redirectNewChan(wg *sync.WaitGroup, newChan ssh.NewChannel
 	return nil
 }
 
-func (srv *sshServer) redirectChan(
+func (srv *SSHServer) redirectChan(
 	wg *sync.WaitGroup,
 	chan1, chan2 ssh.Channel,
 	reqs1, reqs2 <-chan *ssh.Request,
@@ -521,7 +521,7 @@ func (srv *sshServer) redirectChan(
 	}()
 }
 
-func (srv *sshServer) redirectChanReqs(
+func (srv *SSHServer) redirectChanReqs(
 	from <-chan *ssh.Request,
 	to ssh.Channel,
 ) {
@@ -531,7 +531,7 @@ func (srv *sshServer) redirectChanReqs(
 	})
 }
 
-func (srv *sshServer) redirectReqs(
+func (srv *SSHServer) redirectReqs(
 	from <-chan *ssh.Request,
 	to func(name string, wantReply bool, payload []byte) (bool, []byte, error),
 ) {
@@ -540,7 +540,7 @@ func (srv *sshServer) redirectReqs(
 	}
 }
 
-func (srv *sshServer) redirectReq(
+func (srv *SSHServer) redirectReq(
 	from *ssh.Request,
 	to func(name string, wantReply bool, payload []byte) (bool, []byte, error),
 ) error {
@@ -555,7 +555,7 @@ func (srv *sshServer) redirectReq(
 	return err
 }
 
-func (srv *sshServer) addResource(res io.Closer) {
+func (srv *SSHServer) addResource(res io.Closer) {
 	srv.resourcesLock.Lock()
 
 	defer srv.resourcesLock.Unlock()
@@ -563,7 +563,7 @@ func (srv *sshServer) addResource(res io.Closer) {
 	srv.resources = append(srv.resources, res)
 }
 
-func (srv *sshServer) Close() error {
+func (srv *SSHServer) Close() error {
 	srv.resourcesLock.Lock()
 
 	defer srv.resourcesLock.Unlock()

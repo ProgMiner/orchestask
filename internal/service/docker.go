@@ -27,7 +27,7 @@ const (
 func NewDocker(ctx context.Context, image string) (*Docker, error) {
 	return withDockerClient(func(client *dockerClient.Client) (*Docker, error) {
 		res, err := client.ImageList(ctx, dockerImage.ListOptions{
-			Filters: dockerFilter.NewArgs(dockerFilter.KeyValuePair{"reference", image}),
+			Filters: dockerFilter.NewArgs(dockerFilter.KeyValuePair{Key: "reference", Value: image}),
 		})
 
 		if err != nil {

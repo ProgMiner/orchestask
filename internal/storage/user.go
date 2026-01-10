@@ -6,8 +6,8 @@ import (
 )
 
 import (
-	"bypm.ru/orchestask/model"
-	"bypm.ru/orchestask/util"
+	"bypm.ru/orchestask/internal/model"
+	"bypm.ru/orchestask/internal/util"
 )
 
 type SSHUsernamePKey struct {

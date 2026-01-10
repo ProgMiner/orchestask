@@ -12,9 +12,9 @@ import (
 )
 
 import (
-	"bypm.ru/orchestask/model"
-	"bypm.ru/orchestask/storage"
-	"bypm.ru/orchestask/util"
+	"bypm.ru/orchestask/internal/model"
+	"bypm.ru/orchestask/internal/storage"
+	"bypm.ru/orchestask/internal/util"
 )
 
 type User struct {
@@ -25,9 +25,11 @@ type User struct {
 }
 
 var (
-	NoUserErr     = errors.New("user not found")
-	UserHaveTGErr = errors.New("user have already attached TG")
+	ErrNoUser     = errors.New("user not found")
+	ErrUserHaveTG = errors.New("user have already attached TG")
 )
+
+// TODO: restrict one-to-one between TG and SSH
 
 func NewUser(storage *storage.Storage) (*User, error) {
 	userStorage, err := storage.User()
@@ -67,7 +69,7 @@ func (service *User) UpdateContainer(id model.ID, image, container string) (*mod
 	}
 
 	if user == nil {
-		return nil, NoUserErr
+		return nil, ErrNoUser
 	}
 
 	user.ContainerImage = image
@@ -83,7 +85,7 @@ func (service *User) MakeTGLink(id model.ID) (*model.User, error) {
 	}
 
 	if user == nil {
-		return nil, NoUserErr
+		return nil, ErrNoUser
 	}
 
 	if user.TGLink == "" {
@@ -101,7 +103,7 @@ func (service *User) WaitTGAttached(ctx context.Context, id model.ID) (*model.Us
 	}
 
 	if !ok {
-		return nil, NoUserErr
+		return nil, ErrNoUser
 	}
 
 	waiter, _ := util.Synchronized(&service.tgWaitersMutex, func() (<-chan struct{}, struct{}) {
@@ -135,11 +137,11 @@ func (service *User) AttachTG(
 	}
 
 	if user == nil {
-		return nil, NoUserErr
+		return nil, ErrNoUser
 	}
 
 	if user.TG != 0 {
-		return nil, UserHaveTGErr
+		return nil, ErrUserHaveTG
 	}
 
 	user.TG = tg

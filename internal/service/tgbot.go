@@ -57,9 +57,9 @@ func (service *TGBot) handleStart(ctx context.Context, update *tgModel.Update) e
 	user, err := service.userService.AttachTG(text, from.ID, from.Username, from.FirstName, from.LastName)
 	if err != nil {
 		switch err {
-		case NoUserErr:
+		case ErrNoUser:
 			_, err = service.sendText(ctx, update.Message.Chat.ID, "User not found")
-		case UserHaveTGErr:
+		case ErrUserHaveTG:
 			_, err = service.sendText(ctx, update.Message.Chat.ID, "You was already attached\\!")
 		}
 

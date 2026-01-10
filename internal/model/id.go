@@ -7,7 +7,7 @@ import (
 type ID string
 
 var (
-	idForbiddenRegex = regexp.MustCompile("[^a-zA-Z0-9_\\.+-]")
+	idForbiddenRegex = regexp.MustCompile(`[^a-zA-Z0-9_\.+-]`)
 )
 
 func MakeID(original string) ID {

@@ -8,7 +8,7 @@ import (
 )
 
 import (
-	"bypm.ru/orchestask/model"
+	"bypm.ru/orchestask/internal/model"
 )
 
 type Storage struct {

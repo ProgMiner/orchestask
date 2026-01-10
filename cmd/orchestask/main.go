@@ -8,9 +8,10 @@ import (
 )
 
 import (
-	"bypm.ru/orchestask/service"
-	"bypm.ru/orchestask/storage"
-	"bypm.ru/orchestask/util"
+	"bypm.ru/orchestask/internal/service"
+	"bypm.ru/orchestask/internal/storage"
+	"bypm.ru/orchestask/internal/util"
+	"bypm.ru/orchestask/internal/ssh"
 )
 
 const (
@@ -131,14 +132,14 @@ func _main() (int, string) {
 		return storageInitExit, fmt.Sprintf("Unable to initialize services: %v", err)
 	}
 
-	sshServer, err := makeSSHServer(service, *sshHost, *sshKeyFile, *dockerImageSSHUser)
+	sshServer, err := ssh.MakeSSHServer(service, *sshHost, *sshKeyFile, *dockerImageSSHUser)
 	if err != nil {
 		return sshInitExit, fmt.Sprintf("Unable to initialize SSH server: %v", err)
 	}
 
 	service.TGBot.Run(ctx)
 
-	if err := sshServer.run(ctx); err != nil {
+	if err := sshServer.Run(ctx); err != nil {
 		return sshServerExit, fmt.Sprintf("Server error: %v", err)
 	}
 
