@@ -15,7 +15,7 @@ import (
 )
 
 type SSHUser struct {
-	storage      *Storage
+	storage      *BaseStorage
 	idIndex      map[model.ID]struct{}
 	sshPKeyIndex map[string]model.ID
 	indexMutex   sync.Mutex
@@ -25,15 +25,11 @@ const (
 	sshUserDirName = "ssh-user"
 )
 
-func (storage *Storage) SSHUser() (*SSHUser, error) {
-	user := &SSHUser{
-		storage:      storage,
-		idIndex:      make(map[model.ID]struct{}),
-		sshPKeyIndex: make(map[string]model.ID),
-	}
+func (storage *BaseStorage) SSHUser() (*SSHUser, error) {
+	user := &SSHUser{storage: storage}
 
-	if err := storage.initIndexes(sshUserDirName, user.initIndexes); err != nil {
-		return nil, fmt.Errorf("unable to initialize SSH user indexes: %w", err)
+	if err := user.reindex(); err != nil {
+		return nil, err
 	}
 
 	return user, nil
@@ -98,6 +94,31 @@ func (storage *SSHUser) Save(user *model.SSHUser) (*model.SSHUser, error) {
 		storage.initIndexesUser(user)
 		return user, nil
 	})
+}
+
+func (storage *SSHUser) Reindex() error {
+	_, err := util.Synchronized(&storage.indexMutex, func() (*struct{}, error) {
+		return nil, storage.reindex()
+	})
+
+	return err
+}
+
+func (storage *SSHUser) reindex() error {
+	oldIDIndex := storage.idIndex
+	oldSSHPKeyIndex := storage.sshPKeyIndex
+
+	storage.idIndex = make(map[model.ID]struct{})
+	storage.sshPKeyIndex = make(map[string]model.ID)
+
+	if err := storage.storage.initIndexes(sshUserDirName, storage.initIndexes); err != nil {
+		storage.idIndex = oldIDIndex
+		storage.sshPKeyIndex = oldSSHPKeyIndex
+
+		return fmt.Errorf("unable to initialize SSH user indexes: %w", err)
+	}
+
+	return nil
 }
 
 func (storage *SSHUser) initIndexes(id model.ID) error {

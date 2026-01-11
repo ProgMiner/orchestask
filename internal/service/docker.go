@@ -10,6 +10,7 @@ import (
 import (
 	dockerContainer "github.com/docker/docker/api/types/container"
 	// dockerNetwork "github.com/docker/docker/api/types/network"
+	dockerErr "github.com/containerd/errdefs"
 	dockerFilter "github.com/docker/docker/api/types/filters"
 	dockerImage "github.com/docker/docker/api/types/image"
 	dockerClient "github.com/docker/docker/client"
@@ -89,6 +90,23 @@ func (service *Docker) InitContainer(ctx context.Context, hostname, image string
 	})
 
 	return res.image, res.id, err
+}
+
+func (service *Docker) IsContainerExists(ctx context.Context, id string) (bool, error) {
+	_, err := withDockerClient(func(client *dockerClient.Client) (*struct{}, error) {
+		_, err := client.ContainerInspect(ctx, id)
+		return nil, err
+	})
+
+	if err == nil {
+		return true, nil
+	}
+
+	if dockerErr.IsNotFound(err) {
+		return false, nil
+	}
+
+	return false, err
 }
 
 func (service *Docker) EnsureContainer(ctx context.Context, id string) (string, error) {

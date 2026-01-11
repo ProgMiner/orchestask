@@ -14,8 +14,7 @@ import (
 )
 
 type User struct {
-	sshUserStorage *storage.SSHUser
-	userStorage    *storage.User
+	storage *storage.Storage
 
 	tgWaiters      map[model.ID]chan struct{}
 	tgWaitersMutex sync.Mutex
@@ -27,39 +26,24 @@ var (
 )
 
 func NewUser(storage *storage.Storage) (*User, error) {
-	sshUserStorage, err := storage.SSHUser()
-	if err != nil {
-		return nil, fmt.Errorf("unable to init SSH user storage: %w", err)
-	}
-
-	userStorage, err := storage.User()
-	if err != nil {
-		return nil, fmt.Errorf("unable to init user storage: %w", err)
-	}
-
 	service := &User{
-		sshUserStorage: sshUserStorage,
-		userStorage:    userStorage,
-		tgWaiters:      make(map[model.ID]chan struct{}),
+		storage:   storage,
+		tgWaiters: make(map[model.ID]chan struct{}),
 	}
 
 	return service, nil
 }
 
 func (service *User) Authenticate(pkey string) (*model.SSHUser, error) {
-	return service.sshUserStorage.FindByPKey(pkey)
+	return service.storage.SSHUser.FindByPKey(pkey)
 }
 
 func (service *User) Register(pkey string) (*model.SSHUser, error) {
-	return service.sshUserStorage.Save(&model.SSHUser{PKey: pkey})
+	return service.storage.SSHUser.Save(&model.SSHUser{PKey: pkey})
 }
 
 func (service *User) GetByID(id int64) (*model.User, error) {
-	return service.userStorage.FindByID(id)
-}
-
-func (service *User) UpdateContainer(id int64, image, container string) (*model.User, error) {
-	user, err := service.userStorage.FindByID(id)
+	user, err := service.storage.User.FindByID(id)
 	if err != nil {
 		return nil, err
 	}
@@ -68,14 +52,27 @@ func (service *User) UpdateContainer(id int64, image, container string) (*model.
 		return nil, ErrNoUser
 	}
 
+	return user, nil
+}
+
+func (service *User) GetAll() ([]*model.User, error) {
+	return service.storage.User.FindAll()
+}
+
+func (service *User) UpdateContainer(id int64, image, container string) (*model.User, error) {
+	user, err := service.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+
 	user.ContainerImage = image
 	user.Container = container
 
-	return service.userStorage.Save(user)
+	return service.storage.User.Save(user)
 }
 
 func (service *User) WaitTGAttached(ctx context.Context, id model.ID) (*model.SSHUser, error) {
-	if ok, err := service.sshUserStorage.ExistsByID(id); !ok || err != nil {
+	if ok, err := service.storage.SSHUser.ExistsByID(id); !ok || err != nil {
 		if err == nil {
 			err = ErrNoUser
 		}
@@ -99,7 +96,7 @@ func (service *User) WaitTGAttached(ctx context.Context, id model.ID) (*model.SS
 		return nil, ctx.Err()
 
 	case <-waiter:
-		return service.sshUserStorage.FindByID(id)
+		return service.storage.SSHUser.FindByID(id)
 	}
 }
 
@@ -108,7 +105,7 @@ func (service *User) AttachTG(
 	tg int64,
 	username, firstName, lastName string,
 ) (*model.User, error) {
-	sshUser, err := service.sshUserStorage.FindByID(model.StringToID(tgLink))
+	sshUser, err := service.storage.SSHUser.FindByID(model.StringToID(tgLink))
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +118,7 @@ func (service *User) AttachTG(
 		return nil, ErrSSHUserHaveTG
 	}
 
-	user, err := service.userStorage.FindByID(tg)
+	user, err := service.storage.User.FindByID(tg)
 	if err != nil {
 		return nil, err
 	}
@@ -134,14 +131,14 @@ func (service *User) AttachTG(
 			LastName:  lastName,
 		}
 
-		user, err = service.userStorage.Save(user)
+		user, err = service.storage.User.Save(user)
 		if err != nil {
 			return nil, fmt.Errorf("unable to create user for TG %d: %w", tg, err)
 		}
 	}
 
 	sshUser.TG = tg
-	sshUser, err = service.sshUserStorage.Save(sshUser)
+	sshUser, err = service.storage.SSHUser.Save(sshUser)
 	if err != nil {
 		return nil, err
 	}

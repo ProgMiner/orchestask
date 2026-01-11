@@ -11,7 +11,7 @@ import (
 )
 
 type User struct {
-	storage    *Storage
+	storage    *BaseStorage
 	idIndex    map[int64]struct{}
 	indexMutex sync.Mutex
 }
@@ -20,14 +20,11 @@ const (
 	userDirName = "user"
 )
 
-func (storage *Storage) User() (*User, error) {
-	user := &User{
-		storage: storage,
-		idIndex: make(map[int64]struct{}),
-	}
+func (storage *BaseStorage) User() (*User, error) {
+	user := &User{storage: storage}
 
-	if err := storage.initIndexes(userDirName, user.initIndexes); err != nil {
-		return nil, fmt.Errorf("unable to initialize user indexes: %w", err)
+	if err := user.reindex(); err != nil {
+		return nil, err
 	}
 
 	return user, nil
@@ -48,6 +45,30 @@ func (storage *User) FindByID(id int64) (*model.User, error) {
 	return storage.readUser(id)
 }
 
+func (storage *User) FindAll() ([]*model.User, error) {
+	userIDs, _ := util.Synchronized(&storage.indexMutex, func() ([]int64, *struct{}) {
+		userIDs := make([]int64, 0, len(storage.idIndex))
+
+		for id := range storage.idIndex {
+			userIDs = append(userIDs, id)
+		}
+
+		return userIDs, nil
+	})
+
+	users := make([]*model.User, 0, len(userIDs))
+	for _, id := range userIDs {
+		user, err := storage.readUser(id)
+		if err != nil {
+			return nil, err
+		}
+
+		users = append(users, user)
+	}
+
+	return users, nil
+}
+
 func (storage *User) Save(user *model.User) (*model.User, error) {
 	if user.ID == 0 {
 		return nil, fmt.Errorf("user ID must be a valid TG ID")
@@ -65,6 +86,28 @@ func (storage *User) Save(user *model.User) (*model.User, error) {
 		storage.initIndexesUser(user)
 		return user, nil
 	})
+}
+
+func (storage *User) Reindex() error {
+	_, err := util.Synchronized(&storage.indexMutex, func() (*struct{}, error) {
+		return nil, storage.reindex()
+	})
+
+	return err
+}
+
+func (storage *User) reindex() error {
+	oldIDIndex := storage.idIndex
+
+	storage.idIndex = make(map[int64]struct{})
+
+	if err := storage.storage.initIndexes(userDirName, storage.initIndexes); err != nil {
+		storage.idIndex = oldIDIndex
+
+		return fmt.Errorf("unable to initialize user indexes: %w", err)
+	}
+
+	return nil
 }
 
 func (storage *User) initIndexes(id model.ID) error {

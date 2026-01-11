@@ -1,145 +1,36 @@
 package storage
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-)
-
-import (
-	"bypm.ru/orchestask/internal/model"
 )
 
 type Storage struct {
-	basePath     string
-	lockFilePath string
+	SSHUser *SSHUser
+	User    *User
 }
 
-type createFile int
-
-const (
-	noCreate createFile = iota
-	maybeCreate
-	onlyCreate
-)
-
-func Init(basePath string) (*Storage, error) {
-	s := &Storage{basePath: filepath.Clean(basePath)}
-
-	if _, err := s.ensureDir(""); err != nil {
-		return nil, fmt.Errorf("wrong storage base path: %w", err)
-	}
-
-	if err := s.makeLockFile(); err != nil {
-		return nil, err
-	}
-
-	return s, nil
-}
-
-func (s *Storage) makeLockFile() error {
-	s.lockFilePath = filepath.Join(s.basePath, ".lock")
-
-	lockFile, err := os.OpenFile(s.lockFilePath, os.O_RDONLY|os.O_CREATE|os.O_EXCL, 0000)
+func (storage *BaseStorage) Storage() (*Storage, error) {
+	sshUserStorage, err := storage.SSHUser()
 	if err != nil {
-		return fmt.Errorf("unable to create lockfile: %w", err)
+		return nil, fmt.Errorf("unable to init SSH user storage: %w", err)
 	}
 
-	if err := lockFile.Close(); err != nil {
-		return fmt.Errorf("unexpected error: %w", err)
-	}
-
-	return nil
-}
-
-func (s *Storage) Close() error {
-	if err := os.Remove(s.lockFilePath); err != nil {
-		return fmt.Errorf("unable to delete lockfile: %w", err)
-	}
-
-	return nil
-}
-
-func (storage *Storage) ensureDir(dir string) (string, error) {
-	path := filepath.Join(storage.basePath, dir)
-	return path, os.MkdirAll(path, 0755)
-}
-
-func (storage *Storage) initIndexes(dir string, handler func(id model.ID) error) error {
-	path, err := storage.ensureDir(dir)
+	userStorage, err := storage.User()
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("unable to init user storage: %w", err)
 	}
 
-	files, err := os.ReadDir(path)
-	if err != nil {
-		return err
+	res := &Storage{
+		SSHUser: sshUserStorage,
+		User:    userStorage,
 	}
-
-	for _, file := range files {
-		id := model.ID(file.Name())
-
-		if err := handler(id); err != nil {
-			return fmt.Errorf("unable to init %v: %w", id, err)
-		}
-	}
-
-	return nil
+	return res, nil
 }
 
-func (storage *Storage) readFile(dir string, id model.ID, result any) error {
-	path := filepath.Join(storage.basePath, dir, string(id))
+func (storage *Storage) Reindex() error {
+	sshUserErr := storage.SSHUser.Reindex()
+	userErr := storage.User.Reindex()
 
-	file, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("unable to open file %s: %w", path, err)
-	}
-
-	defer func() {
-		if err1 := file.Close(); err1 != nil {
-			err = fmt.Errorf("unable to close file %s: %w", path, err)
-		}
-	}()
-
-	if err := json.NewDecoder(file).Decode(result); err != nil {
-		return fmt.Errorf("unable to decode JSON (%s): %w", path, err)
-	}
-
-	return err
-}
-
-func (storage *Storage) saveFile(dir string, id model.ID, create createFile, data any) error {
-	path := filepath.Join(storage.basePath, dir, string(id))
-
-	openFlags := os.O_WRONLY | os.O_TRUNC
-	switch create {
-	case onlyCreate:
-		openFlags |= os.O_EXCL
-		fallthrough
-
-	case maybeCreate:
-		openFlags |= os.O_CREATE
-	}
-
-	file, err := os.OpenFile(path, openFlags, 0644)
-	if err != nil {
-		return fmt.Errorf("unable to open file %s: %w", path, err)
-	}
-
-	defer func() {
-		if err1 := file.Close(); err1 != nil {
-			err = fmt.Errorf("unable to close file %s: %w", path, err)
-		}
-	}()
-
-	enc := json.NewEncoder(file)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "\t")
-
-	if err := enc.Encode(data); err != nil {
-		return fmt.Errorf("unable to encode JSON (%s): %w", path, err)
-	}
-
-	return err
+	return errors.Join(sshUserErr, userErr)
 }

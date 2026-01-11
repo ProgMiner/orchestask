@@ -79,7 +79,7 @@ func makeService(ctx context.Context, storage *storage.Storage) (*service.Servic
 		return nil, err
 	}
 
-	tgBot, err := service.NewTGBot(*tgApi, user)
+	tgBot, err := service.NewTGBot(*tgApi, storage, user, docker)
 	if err != nil {
 		return nil, err
 	}
@@ -116,16 +116,21 @@ func _main() (int, string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	storage, err := storage.Init(*storageBase)
+	baseStorage, err := storage.Init(*storageBase)
 	if err != nil {
 		return storageInitExit, fmt.Sprintf("Unable to initialize storage: %v", err)
 	}
 
 	defer func() {
-		if err := storage.Close(); err != nil {
+		if err := baseStorage.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "Unable to close storage: %v\n", err)
 		}
 	}()
+
+	storage, err := baseStorage.Storage()
+	if err != nil {
+		return storageInitExit, fmt.Sprintf("Unable to initialize storage: %v", err)
+	}
 
 	service, err := makeService(ctx, storage)
 	if err != nil {
