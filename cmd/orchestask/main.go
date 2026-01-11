@@ -140,7 +140,7 @@ func _main() (int, string) {
 	service.TGBot.Run(ctx)
 
 	if err := sshServer.Run(ctx); err != nil {
-		return sshServerExit, fmt.Sprintf("Server error: %v", err)
+		return sshServerExit, fmt.Sprintf("SSH server error: %v", err)
 	}
 
 	return okExit, ""

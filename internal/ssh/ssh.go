@@ -66,7 +66,7 @@ func MakeSSHServer(
 
 	srv.listener, err = net.Listen("tcp", host)
 	if err != nil {
-		return nil, fmt.Errorf("unable to run SSH server: %w", err)
+		return nil, fmt.Errorf(`unable to listen "%v": %w`, host, err)
 	}
 
 	srv.addResource(srv.listener)
@@ -217,7 +217,7 @@ func (srv *SSHServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 			return fmt.Errorf("unable to wait for TG attach for %s: %w", sshUserID, err)
 		}
 
-		util.Log(ctx, "Attached SSH user %s to TG %d", sshUserID, sshUser.ID)
+		util.Log(ctx, "Attached SSH user %s to TG %d", sshUserID, sshUser.TG)
 
 		_, _ = fmt.Fprint(conn.session, "Great!\r\n")
 	}
