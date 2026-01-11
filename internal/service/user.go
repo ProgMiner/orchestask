@@ -8,62 +8,58 @@ import (
 )
 
 import (
-	"github.com/google/uuid"
-)
-
-import (
 	"bypm.ru/orchestask/internal/model"
 	"bypm.ru/orchestask/internal/storage"
 	"bypm.ru/orchestask/internal/util"
 )
 
 type User struct {
-	storage *storage.User
+	sshUserStorage *storage.SSHUser
+	userStorage    *storage.User
 
 	tgWaiters      map[model.ID]chan struct{}
 	tgWaitersMutex sync.Mutex
 }
 
 var (
-	ErrNoUser     = errors.New("user not found")
-	ErrUserHaveTG = errors.New("user have already attached TG")
+	ErrNoUser        = errors.New("user not found")
+	ErrSSHUserHaveTG = errors.New("user have already attached TG")
 )
 
-// TODO: restrict one-to-one between TG and SSH
-
 func NewUser(storage *storage.Storage) (*User, error) {
+	sshUserStorage, err := storage.SSHUser()
+	if err != nil {
+		return nil, fmt.Errorf("unable to init SSH user storage: %w", err)
+	}
+
 	userStorage, err := storage.User()
 	if err != nil {
 		return nil, fmt.Errorf("unable to init user storage: %w", err)
 	}
 
 	service := &User{
-		storage:   userStorage,
-		tgWaiters: make(map[model.ID]chan struct{}),
+		sshUserStorage: sshUserStorage,
+		userStorage:    userStorage,
+		tgWaiters:      make(map[model.ID]chan struct{}),
 	}
 
 	return service, nil
 }
 
-func (service *User) Identify(username, pkey string) (*model.User, error) {
-	return service.storage.FindByUsernameAndPKey(username, pkey)
+func (service *User) Authenticate(pkey string) (*model.SSHUser, error) {
+	return service.sshUserStorage.FindByPKey(pkey)
 }
 
-func (service *User) Register(username, pkey string) (*model.User, error) {
-	user, err := service.storage.FindByUsernameAndPKey(username, pkey)
-	if err != nil {
-		return nil, err
-	}
-
-	if user != nil {
-		return user, fmt.Errorf("user is already exists")
-	}
-
-	return service.storage.Save(&model.User{SSHUsername: username, SSHPKey: pkey})
+func (service *User) Register(pkey string) (*model.SSHUser, error) {
+	return service.sshUserStorage.Save(&model.SSHUser{PKey: pkey})
 }
 
-func (service *User) UpdateContainer(id model.ID, image, container string) (*model.User, error) {
-	user, err := service.storage.FindByID(id)
+func (service *User) GetByID(id int64) (*model.User, error) {
+	return service.userStorage.FindByID(id)
+}
+
+func (service *User) UpdateContainer(id int64, image, container string) (*model.User, error) {
+	user, err := service.userStorage.FindByID(id)
 	if err != nil {
 		return nil, err
 	}
@@ -75,35 +71,16 @@ func (service *User) UpdateContainer(id model.ID, image, container string) (*mod
 	user.ContainerImage = image
 	user.Container = container
 
-	return service.storage.Save(user)
+	return service.userStorage.Save(user)
 }
 
-func (service *User) MakeTGLink(id model.ID) (*model.User, error) {
-	user, err := service.storage.FindByID(id)
-	if err != nil {
+func (service *User) WaitTGAttached(ctx context.Context, id model.ID) (*model.SSHUser, error) {
+	if ok, err := service.sshUserStorage.ExistsByID(id); !ok || err != nil {
+		if err == nil {
+			err = ErrNoUser
+		}
+
 		return nil, err
-	}
-
-	if user == nil {
-		return nil, ErrNoUser
-	}
-
-	if user.TGLink == "" {
-		user.TGLink = uuid.NewString()
-		return service.storage.Save(user)
-	}
-
-	return user, nil
-}
-
-func (service *User) WaitTGAttached(ctx context.Context, id model.ID) (*model.User, error) {
-	ok, err := service.storage.ExistsByID(id)
-	if err != nil {
-		return nil, err
-	}
-
-	if !ok {
-		return nil, ErrNoUser
 	}
 
 	waiter, _ := util.Synchronized(&service.tgWaitersMutex, func() (<-chan struct{}, struct{}) {
@@ -122,43 +99,58 @@ func (service *User) WaitTGAttached(ctx context.Context, id model.ID) (*model.Us
 		return nil, ctx.Err()
 
 	case <-waiter:
-		return service.storage.FindByID(id)
+		return service.sshUserStorage.FindByID(id)
 	}
 }
 
 func (service *User) AttachTG(
 	tgLink string,
 	tg int64,
-	tgUsername, tgFirstName, tgLastName string,
+	username, firstName, lastName string,
 ) (*model.User, error) {
-	user, err := service.storage.FindByTGLink(tgLink)
+	sshUser, err := service.sshUserStorage.FindByID(model.StringToID(tgLink))
+	if err != nil {
+		return nil, err
+	}
+
+	if sshUser == nil {
+		return nil, ErrNoUser
+	}
+
+	if sshUser.TG != 0 {
+		return nil, ErrSSHUserHaveTG
+	}
+
+	user, err := service.userStorage.FindByID(tg)
 	if err != nil {
 		return nil, err
 	}
 
 	if user == nil {
-		return nil, ErrNoUser
+		user = &model.User{
+			ID:        tg,
+			Username:  username,
+			FirstName: firstName,
+			LastName:  lastName,
+		}
+
+		user, err = service.userStorage.Save(user)
+		if err != nil {
+			return nil, fmt.Errorf("unable to create user for TG %d: %w", tg, err)
+		}
 	}
 
-	if user.TG != 0 {
-		return nil, ErrUserHaveTG
-	}
-
-	user.TG = tg
-	user.TGUsername = tgUsername
-	user.TGFirstName = tgFirstName
-	user.TGLastName = tgLastName
-
-	user, err = service.storage.Save(user)
+	sshUser.TG = tg
+	sshUser, err = service.sshUserStorage.Save(sshUser)
 	if err != nil {
 		return nil, err
 	}
 
 	waiter, _ := util.Synchronized(&service.tgWaitersMutex, func() (chan struct{}, struct{}) {
-		waiter, ok := service.tgWaiters[user.ID]
+		waiter, ok := service.tgWaiters[sshUser.ID]
 
 		if ok {
-			delete(service.tgWaiters, user.ID)
+			delete(service.tgWaiters, sshUser.ID)
 		}
 
 		return waiter, struct{}{}

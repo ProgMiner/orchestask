@@ -10,17 +10,10 @@ import (
 	"bypm.ru/orchestask/internal/util"
 )
 
-type SSHUsernamePKey struct {
-	Username string
-	PKey     string
-}
-
 type User struct {
-	storage              *Storage
-	idIndex              map[model.ID]struct{}
-	sshUsernamePKeyIndex map[SSHUsernamePKey]model.ID
-	tgLinkIndex          map[string]model.ID
-	indexMutex           sync.Mutex
+	storage    *Storage
+	idIndex    map[int64]struct{}
+	indexMutex sync.Mutex
 }
 
 const (
@@ -29,27 +22,25 @@ const (
 
 func (storage *Storage) User() (*User, error) {
 	user := &User{
-		storage:              storage,
-		idIndex:              make(map[model.ID]struct{}),
-		sshUsernamePKeyIndex: make(map[SSHUsernamePKey]model.ID),
-		tgLinkIndex:          make(map[string]model.ID),
+		storage: storage,
+		idIndex: make(map[int64]struct{}),
 	}
 
 	if err := storage.initIndexes(userDirName, user.initIndexes); err != nil {
-		return nil, fmt.Errorf("unable to initialize indexes: %w", err)
+		return nil, fmt.Errorf("unable to initialize user indexes: %w", err)
 	}
 
 	return user, nil
 }
 
-func (storage *User) ExistsByID(id model.ID) (bool, error) {
+func (storage *User) ExistsByID(id int64) (bool, error) {
 	return util.Synchronized(&storage.indexMutex, func() (bool, error) {
 		_, ok := storage.idIndex[id]
 		return ok, nil
 	})
 }
 
-func (storage *User) FindByID(id model.ID) (*model.User, error) {
+func (storage *User) FindByID(id int64) (*model.User, error) {
 	if ok, err := storage.ExistsByID(id); !ok || err != nil {
 		return nil, err
 	}
@@ -57,35 +48,9 @@ func (storage *User) FindByID(id model.ID) (*model.User, error) {
 	return storage.readUser(id)
 }
 
-func (storage *User) FindByUsernameAndPKey(username, pkey string) (*model.User, error) {
-	id, ok := util.Synchronized(&storage.indexMutex, func() (model.ID, bool) {
-		id, ok := storage.sshUsernamePKeyIndex[SSHUsernamePKey{username, pkey}]
-		return id, ok
-	})
-
-	if !ok {
-		return nil, nil
-	}
-
-	return storage.readUser(id)
-}
-
-func (storage *User) FindByTGLink(tgLink string) (*model.User, error) {
-	id, ok := util.Synchronized(&storage.indexMutex, func() (model.ID, bool) {
-		id, ok := storage.tgLinkIndex[tgLink]
-		return id, ok
-	})
-
-	if !ok {
-		return nil, nil
-	}
-
-	return storage.readUser(id)
-}
-
 func (storage *User) Save(user *model.User) (*model.User, error) {
-	if user.ID == "" {
-		user.ID = model.MakeID(fmt.Sprintf("%s-%s.json", user.SSHUsername, user.SSHPKey))
+	if user.ID == 0 {
+		return nil, fmt.Errorf("user ID must be a valid TG ID")
 	}
 
 	return util.Synchronized(&storage.indexMutex, func() (*model.User, error) {
@@ -103,7 +68,12 @@ func (storage *User) Save(user *model.User) (*model.User, error) {
 }
 
 func (storage *User) initIndexes(id model.ID) error {
-	user, err := storage.readUser(id)
+	tgID, err := model.IDToInt64(id)
+	if err != nil {
+		return err
+	}
+
+	user, err := storage.readUser(tgID)
 	if err != nil {
 		return err
 	}
@@ -114,26 +84,16 @@ func (storage *User) initIndexes(id model.ID) error {
 
 func (storage *User) initIndexesUser(user *model.User) {
 	storage.idIndex[user.ID] = struct{}{}
-	storage.sshUsernamePKeyIndex[SSHUsernamePKey{user.SSHUsername, user.SSHPKey}] = user.ID
-
-	if user.TGLink != "" {
-		storage.tgLinkIndex[user.TGLink] = user.ID
-	}
 }
 
 func (storage *User) dropIndexesUser(user *model.User) {
 	delete(storage.idIndex, user.ID)
-	delete(storage.sshUsernamePKeyIndex, SSHUsernamePKey{user.SSHUsername, user.SSHPKey})
-
-	if user.TGLink != "" {
-		delete(storage.tgLinkIndex, user.TGLink)
-	}
 }
 
-func (storage *User) readUser(id model.ID) (*model.User, error) {
+func (storage *User) readUser(id int64) (*model.User, error) {
 	var user model.User
 
-	if err := storage.storage.readFile(userDirName, id, &user); err != nil {
+	if err := storage.storage.readFile(userDirName, model.Int64ToID(id), &user); err != nil {
 		return nil, fmt.Errorf("unable to read user %v: %w", id, err)
 	}
 
@@ -142,7 +102,7 @@ func (storage *User) readUser(id model.ID) (*model.User, error) {
 }
 
 func (storage *User) saveUser(user *model.User) error {
-	if err := storage.storage.saveFile(userDirName, user.ID, user); err != nil {
+	if err := storage.storage.saveFile(userDirName, model.Int64ToID(user.ID), maybeCreate, user); err != nil {
 		return fmt.Errorf("unable to save user %v: %w", user.ID, err)
 	}
 

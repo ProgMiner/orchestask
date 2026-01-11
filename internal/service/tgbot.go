@@ -3,13 +3,16 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 )
 
 import (
 	tg "github.com/go-telegram/bot"
 	tgModel "github.com/go-telegram/bot/models"
+)
+
+import (
+	"bypm.ru/orchestask/internal/util"
 )
 
 type TGBot struct {
@@ -37,6 +40,7 @@ func NewTGBot(apiKey string, userService *User) (*TGBot, error) {
 }
 
 func (service *TGBot) Run(ctx context.Context) {
+	ctx = util.WithLoggingScope(ctx, "Bot")
 	go service.bot.Start(ctx)
 }
 
@@ -54,20 +58,19 @@ func (service *TGBot) handleStart(ctx context.Context, update *tgModel.Update) e
 	text = strings.TrimSpace(text)
 
 	from := update.Message.From
-	user, err := service.userService.AttachTG(text, from.ID, from.Username, from.FirstName, from.LastName)
+	_, err := service.userService.AttachTG(text, from.ID, from.Username, from.FirstName, from.LastName)
 	if err != nil {
 		switch err {
 		case ErrNoUser:
 			_, err = service.sendText(ctx, update.Message.Chat.ID, "User not found")
-		case ErrUserHaveTG:
-			_, err = service.sendText(ctx, update.Message.Chat.ID, "You was already attached\\!")
+		case ErrSSHUserHaveTG:
+			_, err = service.sendText(ctx, update.Message.Chat.ID, `You was already attached\!`)
 		}
 
 		return err
 	}
 
-	fmt.Printf("[%s] Attached to TG %v (%v)\n", user.ID, update.Message.From.ID, update.Message.From.Username)
-	_, err = service.sendText(ctx, update.Message.Chat.ID, "You have successfully attached\\!")
+	_, err = service.sendText(ctx, update.Message.Chat.ID, `You have successfully attached\!`)
 	return err
 }
 
@@ -76,7 +79,7 @@ func (service *TGBot) makeHandler(
 ) tg.HandlerFunc {
 	return func(ctx context.Context, _ *tg.Bot, update *tgModel.Update) {
 		if err := f(ctx, update); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "[TG] Unable to process update: %v\n", err)
+			util.Log(ctx, "Unable to process update: %v", err)
 		}
 	}
 }

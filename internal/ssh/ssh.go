@@ -18,11 +18,13 @@ import (
 )
 
 import (
+	"bypm.ru/orchestask/internal/model"
 	"bypm.ru/orchestask/internal/service"
+	"bypm.ru/orchestask/internal/util"
 )
 
 const (
-	sshPublicKeyPermission = "pubkey"
+	sshPublicKeyPermission = "pkey"
 )
 
 type SSHServer struct {
@@ -105,6 +107,7 @@ func (srv *SSHServer) Run(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 	ctx, cancel := context.WithCancel(ctx)
+	ctx = util.WithLoggingScope(ctx, "SSH")
 
 	defer func() {
 		_ = srv.Close()
@@ -132,8 +135,9 @@ func (srv *SSHServer) Run(ctx context.Context) error {
 func (srv *SSHServer) handleConn(ctx context.Context, wg *sync.WaitGroup, conn net.Conn) {
 	defer wg.Done()
 
+	ctx = util.WithLoggingScope(ctx, conn.RemoteAddr().String())
 	if err := srv._handleConn(ctx, wg, conn); err != nil {
-		fmt.Fprintf(os.Stderr, "[%s] SSH communication error: %v\n", conn.RemoteAddr().String(), err)
+		util.Log(ctx, "SSH communication error: %v", err)
 	}
 }
 
@@ -172,34 +176,31 @@ func (srv *SSHServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 	username := conn.conn.User()
 	pkey := conn.conn.Permissions.Extensions[sshPublicKeyPermission]
 
-	addr := conn.conn.RemoteAddr().String()
-	fmt.Printf("[%s] New connection from: %s %s\n", addr, username, pkey)
+	util.Log(ctx, "New connection: %s %s", username, pkey)
 
-	user, err := srv.service.User.Identify(username, pkey)
+	sshUser, err := srv.service.User.Authenticate(pkey)
 	if err != nil {
-		return fmt.Errorf("unable to identify user: %w", err)
+		return fmt.Errorf("unable to authenticate SSH user with public key %s: %w", pkey, err)
 	}
 
-	if user == nil {
-		user, err = srv.service.User.Register(username, pkey)
+	if sshUser == nil {
+		sshUser, err = srv.service.User.Register(pkey)
 		if err != nil {
-			return fmt.Errorf("unable to register user: %w", err)
+			return fmt.Errorf("unable to register SSH user with public key %s: %w", pkey, err)
 		}
 
-		_, _ = fmt.Fprintf(conn.session, "Hello, %s! You have been just registered.\r\n", username)
+		_, _ = fmt.Fprintf(conn.session, "Hello, %s! You have been registered.\r\n", username)
 	}
 
-	fmt.Printf("[%s] [%s] Logged in\n", addr, user.ID)
-
-	if user.TG == 0 {
-		user, err = srv.service.User.MakeTGLink(user.ID)
+	if sshUser.TG == 0 {
+		tgLink, err := model.IDToString(sshUser.ID)
 		if err != nil {
-			return fmt.Errorf("unable to generate TG link: %w", err)
+			return err
 		}
 
-		tgLink, err := srv.service.TGBot.MakeStartLink(ctx, user.TGLink)
+		tgLink, err = srv.service.TGBot.MakeStartLink(ctx, tgLink)
 		if err != nil {
-			return fmt.Errorf("unable to generate TG link: %w", err)
+			return fmt.Errorf("unable to generate TG link for %s: %w", sshUser.ID, err)
 		}
 
 		msg := "Seems like you haven't attached your Telegram account for now. " +
@@ -210,20 +211,31 @@ func (srv *SSHServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 
 		_, _ = fmt.Fprintf(conn.session, msg, tgLink)
 
-		user, err = srv.service.User.WaitTGAttached(ctx, user.ID)
+		sshUserID := sshUser.ID
+		sshUser, err = srv.service.User.WaitTGAttached(ctx, sshUserID)
 		if err != nil {
-			return fmt.Errorf("unable to wait for TG attach: %w", err)
+			return fmt.Errorf("unable to wait for TG attach for %s: %w", sshUserID, err)
 		}
+
+		util.Log(ctx, "Attached SSH user %s to TG %d", sshUserID, sshUser.ID)
 
 		_, _ = fmt.Fprint(conn.session, "Great!\r\n")
 	}
 
+	user, err := srv.service.User.GetByID(sshUser.TG)
+	if err != nil {
+		return fmt.Errorf("unable to resolve user by ID %d: %w", sshUser.TG, err)
+	}
+
+	ctx = util.WithLoggingScope(ctx, fmt.Sprintf("%d", user.ID))
+	util.Log(ctx, "Logged in using SSH user %s", sshUser.ID)
+
 	if user.Container == "" {
 		_, _ = fmt.Fprint(conn.session, "Initializing container for you...\r\n")
 
-		hostname := user.TGUsername
+		hostname := user.Username
 		if hostname == "" {
-			hostname = user.SSHUsername
+			hostname = username
 		}
 
 		containerImage, containerID, err := srv.service.Docker.InitContainer(ctx, hostname, user.ContainerImage)
@@ -236,13 +248,7 @@ func (srv *SSHServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 			return fmt.Errorf("unable to set container ID: %w", err)
 		}
 
-		fmt.Printf(
-			"[%s] [%s] Initialized container from image \"%s\": %s\n",
-			addr,
-			user.ID,
-			containerImage,
-			containerID,
-		)
+		util.Log(ctx, `Initialized container from image "%s": %s`, containerImage, containerID)
 	}
 
 	containerIP, err := srv.service.Docker.EnsureContainer(ctx, user.Container)
@@ -250,7 +256,7 @@ func (srv *SSHServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 		return fmt.Errorf("unable to ensure running container: %w", err)
 	}
 
-	fmt.Printf("[%s] [%s] Connecting to container IP %s\n", addr, user.ID, containerIP)
+	util.Log(ctx, "Connecting to container IP %s...", containerIP)
 
 	containerAddr := fmt.Sprintf("%s:22", containerIP)
 

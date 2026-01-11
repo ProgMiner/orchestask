@@ -9,9 +9,9 @@ import (
 
 import (
 	"bypm.ru/orchestask/internal/service"
+	"bypm.ru/orchestask/internal/ssh"
 	"bypm.ru/orchestask/internal/storage"
 	"bypm.ru/orchestask/internal/util"
-	"bypm.ru/orchestask/internal/ssh"
 )
 
 const (

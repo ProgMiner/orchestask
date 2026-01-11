@@ -16,6 +16,14 @@ type Storage struct {
 	lockFilePath string
 }
 
+type createFile int
+
+const (
+	noCreate createFile = iota
+	maybeCreate
+	onlyCreate
+)
+
 func Init(basePath string) (*Storage, error) {
 	s := &Storage{basePath: filepath.Clean(basePath)}
 
@@ -101,10 +109,20 @@ func (storage *Storage) readFile(dir string, id model.ID, result any) error {
 	return err
 }
 
-func (storage *Storage) saveFile(dir string, id model.ID, data any) error {
+func (storage *Storage) saveFile(dir string, id model.ID, create createFile, data any) error {
 	path := filepath.Join(storage.basePath, dir, string(id))
 
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	openFlags := os.O_WRONLY | os.O_TRUNC
+	switch create {
+	case onlyCreate:
+		openFlags |= os.O_EXCL
+		fallthrough
+
+	case maybeCreate:
+		openFlags |= os.O_CREATE
+	}
+
+	file, err := os.OpenFile(path, openFlags, 0644)
 	if err != nil {
 		return fmt.Errorf("unable to open file %s: %w", path, err)
 	}
