@@ -145,6 +145,14 @@ func (service *Docker) EnsureContainer(ctx context.Context, id string) (string, 
 	})
 }
 
+func (service *Docker) StopContainer(ctx context.Context, id string) error {
+	_, err := withDockerClient(func(client *dockerClient.Client) (*struct{}, error) {
+		return nil, client.ContainerStop(ctx, id, dockerContainer.StopOptions{})
+	})
+
+	return err
+}
+
 func withDockerClient[T any](f func(client *dockerClient.Client) (T, error)) (T, error) {
 	client, err := dockerClient.NewClientWithOpts(
 		dockerClient.FromEnv,

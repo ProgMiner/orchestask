@@ -143,14 +143,14 @@ func (service *User) AttachTG(
 		return nil, err
 	}
 
-	waiter, _ := util.Synchronized(&service.tgWaitersMutex, func() (chan struct{}, struct{}) {
+	waiter, _ := util.Synchronized(&service.tgWaitersMutex, func() (chan struct{}, *struct{}) {
 		waiter, ok := service.tgWaiters[sshUser.ID]
 
 		if ok {
 			delete(service.tgWaiters, sshUser.ID)
 		}
 
-		return waiter, struct{}{}
+		return waiter, nil
 	})
 
 	if waiter != nil {

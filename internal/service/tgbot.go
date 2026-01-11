@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 )
 
 import (
@@ -23,6 +25,9 @@ type TGBot struct {
 	userService   *User
 	dockerService *Docker
 	bot           *tg.Bot
+
+	recentUsers      map[int64]struct{}
+	recentUsersMutex sync.Mutex
 }
 
 func NewTGBot(
@@ -37,7 +42,13 @@ func NewTGBot(
 		return nil, fmt.Errorf("unable to initialize bot: %w", err)
 	}
 
-	service := &TGBot{storage, userService, dockerService, bot}
+	service := &TGBot{
+		storage:       storage,
+		userService:   userService,
+		dockerService: dockerService,
+		bot:           bot,
+		recentUsers:   make(map[int64]struct{}),
+	}
 
 	bot.RegisterHandler(
 		tg.HandlerTypeMessageText,
@@ -51,6 +62,13 @@ func NewTGBot(
 		"me",
 		tg.MatchTypeCommand,
 		service.makeHandler(service.handleMe),
+	)
+
+	bot.RegisterHandler(
+		tg.HandlerTypeMessageText,
+		"stopcontainer",
+		tg.MatchTypeCommand,
+		service.makeHandler(service.handleStopContainer),
 	)
 
 	bot.RegisterHandler(
@@ -138,6 +156,10 @@ func (service *TGBot) handleMe(ctx context.Context, update *tgModel.Update) erro
 	{
 		cmdLines := []string{`Available commands:`}
 
+		if user.Container != "" {
+			cmdLines = append(cmdLines, `• /stopcontainer — Stop the Docker container`)
+		}
+
 		if user.Admin {
 			cmdLines = append(cmdLines, `• /refreshdb — Refresh the database`)
 			cmdLines = append(cmdLines, `• /scancontainers — Check the Docker containers existence`)
@@ -168,6 +190,45 @@ func (service *TGBot) handleMe(ctx context.Context, update *tgModel.Update) erro
 			msg.WriteRune('\n')
 		}
 	}
+
+	_, err = service.sendText(ctx, update.Message.Chat.ID, msg.String())
+	return err
+}
+
+func (service *TGBot) handleStopContainer(ctx context.Context, update *tgModel.Update) error {
+	if ok, err := service.limitRate(ctx, update); !ok || err != nil {
+		return err
+	}
+
+	user, err := service.userService.GetByID(update.Message.From.ID)
+	if err != nil && err != ErrNoUser {
+		return err
+	}
+
+	if user == nil {
+		_, err = service.sendText(ctx, update.Message.Chat.ID, "User not found")
+		return err
+	}
+
+	if user.Container == "" {
+		_, err = service.sendText(ctx, update.Message.Chat.ID, "You have no a Docker container")
+		return err
+	}
+
+	if err = service.dockerService.StopContainer(ctx, user.Container); err != nil {
+		msg := `Unable to stop a container\. Contact an administrator`
+		_, err1 := service.sendText(ctx, update.Message.Chat.ID, msg)
+		return errors.Join(err, err1)
+	}
+
+	var msg strings.Builder
+	msg.WriteString(`Stopping the container\.\.\.`)
+	msg.WriteString("\n\n")
+
+	msg.WriteString(`You will *not* receive a notification when it stops\.`)
+	msg.WriteRune('\n')
+
+	msg.WriteString(`It will start on your next SSH connection\.`)
 
 	_, err = service.sendText(ctx, update.Message.Chat.ID, msg.String())
 	return err
@@ -260,6 +321,31 @@ func (service *TGBot) handleScanContainers(ctx context.Context, update *tgModel.
 	errs = append(errs, err)
 
 	return errors.Join(errs...)
+}
+
+func (service *TGBot) limitRate(ctx context.Context, update *tgModel.Update) (bool, error) {
+	return util.Synchronized(&service.recentUsersMutex, func() (bool, error) {
+		if _, ok := service.recentUsers[update.Message.From.ID]; ok {
+			_, err := service.sendText(ctx, update.Message.Chat.ID, "Don't spam the commands, please")
+			return false, err
+		}
+
+		service.recentUsers[update.Message.From.ID] = struct{}{}
+
+		go func() {
+			select {
+			case <-time.After(3 * time.Second):
+			case <-ctx.Done():
+			}
+
+			util.Synchronized(&service.recentUsersMutex, func() (*struct{}, *struct{}) {
+				delete(service.recentUsers, update.Message.From.ID)
+				return nil, nil
+			})
+		}()
+
+		return true, nil
+	})
 }
 
 func (service *TGBot) ensureAdmin(ctx context.Context, update *tgModel.Update) (*model.User, error) {
