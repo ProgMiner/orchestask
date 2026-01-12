@@ -36,7 +36,7 @@ func NewTGBot(
 	userService *User,
 	dockerService *Docker,
 ) (*TGBot, error) {
-	bot, err := tg.New(apiKey)
+	bot, err := tg.New(apiKey, tg.WithMiddlewares(withNewGoroutine))
 
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize bot: %w", err)
@@ -221,16 +221,7 @@ func (service *TGBot) handleStopContainer(ctx context.Context, update *tgModel.U
 		return errors.Join(err, err1)
 	}
 
-	var msg strings.Builder
-	msg.WriteString(`Stopping the container\.\.\.`)
-	msg.WriteString("\n\n")
-
-	msg.WriteString(`You will *not* receive a notification when it stops\.`)
-	msg.WriteRune('\n')
-
-	msg.WriteString(`It will start on your next SSH connection\.`)
-
-	_, err = service.sendText(ctx, update.Message.Chat.ID, msg.String())
+	_, err = service.sendText(ctx, update.Message.Chat.ID, `Container stopped successfully\!`)
 	return err
 }
 
@@ -368,6 +359,12 @@ func (service *TGBot) makeHandler(
 		if err := f(ctx, update); err != nil {
 			util.Log(ctx, "Unable to process update: %v", err)
 		}
+	}
+}
+
+func withNewGoroutine(handler tg.HandlerFunc) tg.HandlerFunc {
+	return func(ctx context.Context, bot *tg.Bot, update *tgModel.Update) {
+		go handler(ctx, bot, update)
 	}
 }
 
