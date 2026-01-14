@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -124,7 +125,7 @@ func (service *Docker) GetContainerLogs(ctx context.Context, id string) (string,
 		}()
 
 		var res strings.Builder
-		_, err = io.Copy(&res, r)
+		err = cleanDockerLogs(r, &res)
 		return res.String(), err
 	})
 }
@@ -198,6 +199,27 @@ func findDockerImages(ctx context.Context, image string) ([]string, error) {
 
 		return images, nil
 	})
+}
+
+func cleanDockerLogs(r io.Reader, w io.Writer) error {
+	prefix := [8]byte{}
+
+	for {
+		if _, err := r.Read(prefix[:]); err != nil {
+			if err == io.EOF {
+				break
+			}
+
+			return err
+		}
+
+		size := binary.BigEndian.Uint32(prefix[4:])
+		if _, err := io.CopyN(w, r, int64(size)); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func withDockerClient[T any](f func(client *dockerClient.Client) (T, error)) (T, error) {
