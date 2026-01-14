@@ -79,29 +79,19 @@ func makeService(ctx context.Context, storage *storage.Storage) (*service.Servic
 		return nil, err
 	}
 
-	tgBot, err := service.NewTGBot(*tgApi, storage, user, docker)
+	result := &service.Service{
+		User:   user,
+		Docker: docker,
+	}
+
+	tgBot, err := service.NewTGBot(*tgApi, storage, result)
 	if err != nil {
 		return nil, err
 	}
 
-	service := &service.Service{
-		User:   user,
-		TGBot:  tgBot,
-		Docker: docker,
-	}
+	result.TGBot = tgBot
 
-	return service, nil
-}
-
-func main() {
-	code, err := _main()
-	if err != "" {
-		fmt.Fprintf(os.Stderr, "%s\n", err)
-	}
-
-	if code != okExit {
-		os.Exit(code)
-	}
+	return result, nil
 }
 
 func _main() (int, string) {
@@ -149,4 +139,15 @@ func _main() (int, string) {
 	}
 
 	return okExit, ""
+}
+
+func main() {
+	code, err := _main()
+	if err != "" {
+		fmt.Fprintf(os.Stderr, "%s\n", err)
+	}
+
+	if code != okExit {
+		os.Exit(code)
+	}
 }
