@@ -48,6 +48,8 @@ func parseArgs() error {
 		w := flag.CommandLine.Output()
 		_, _ = fmt.Fprintf(w, "Usage: %s <command> [arguments...]\n\n", os.Args[0])
 		_, _ = fmt.Fprintln(w, "Commands:")
+		_, _ = fmt.Fprintln(w, "  scan-containers")
+		_, _ = fmt.Fprintln(w, "\tCheck the Docker containers existence")
 		_, _ = fmt.Fprintln(w, "  stop-containers")
 		_, _ = fmt.Fprintln(w, "\tStop all containers attached to the users")
 		_, _ = fmt.Fprintln(w, "\nOptions:")
