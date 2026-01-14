@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -25,38 +26,34 @@ const (
 	dockerContainerMemoryBytes = 48 * 1024 * 1024 // 48 MiB
 )
 
-func NewDocker(ctx context.Context, image string) (*Docker, error) {
-	return withDockerClient(func(client *dockerClient.Client) (*Docker, error) {
-		res, err := client.ImageList(ctx, dockerImage.ListOptions{
-			Filters: dockerFilter.NewArgs(dockerFilter.KeyValuePair{Key: "reference", Value: image}),
-		})
+var (
+	ErrNoDockerImage = errors.New("Docker image wasn't provided, unable to create a container")
+)
 
+func NewDocker(ctx context.Context, image string) (*Docker, error) {
+	images := []string{}
+
+	if image != "" {
+		var err error
+		images, err = findDockerImages(ctx, image)
 		if err != nil {
 			return nil, err
 		}
 
-		if len(res) == 0 {
-			return nil, fmt.Errorf("no Docker images found for \"%s\"", image)
-		}
-
-		images := make([]string, 0, len(res))
-		for _, img := range res {
-			if len(img.RepoTags) == 0 {
-				fmt.Fprintf(os.Stderr, "Skipping image %s without tags\n", img.ID)
-			}
-
-			images = append(images, img.RepoTags[0])
-		}
-
 		fmt.Printf("Going to use the following list of images: %v\n", images)
-		return &Docker{images}, nil
-	})
+	}
+
+	return &Docker{images}, nil
 }
 
 func (service *Docker) InitContainer(ctx context.Context, hostname, image string) (string, string, error) {
 	type resType struct{ image, id string }
 
 	if image == "" {
+		if len(service.images) == 0 {
+			return "", "", ErrNoDockerImage
+		}
+
 		image = service.images[rand.Intn(len(service.images))]
 	}
 
@@ -151,6 +148,33 @@ func (service *Docker) StopContainer(ctx context.Context, id string) error {
 	})
 
 	return err
+}
+
+func findDockerImages(ctx context.Context, image string) ([]string, error) {
+	return withDockerClient(func(client *dockerClient.Client) ([]string, error) {
+		res, err := client.ImageList(ctx, dockerImage.ListOptions{
+			Filters: dockerFilter.NewArgs(dockerFilter.KeyValuePair{Key: "reference", Value: image}),
+		})
+
+		if err != nil {
+			return nil, err
+		}
+
+		if len(res) == 0 {
+			return nil, fmt.Errorf("no Docker images found for \"%s\"", image)
+		}
+
+		images := make([]string, 0, len(res))
+		for _, img := range res {
+			if len(img.RepoTags) == 0 {
+				fmt.Fprintf(os.Stderr, "Skipping image %s without tags\n", img.ID)
+			}
+
+			images = append(images, img.RepoTags[0])
+		}
+
+		return images, nil
+	})
 }
 
 func withDockerClient[T any](f func(client *dockerClient.Client) (T, error)) (T, error) {
