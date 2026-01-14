@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
+	"strings"
 )
 
 import (
@@ -89,7 +91,7 @@ func (service *Docker) InitContainer(ctx context.Context, hostname, image string
 	return res.image, res.id, err
 }
 
-func (service *Docker) IsContainerExists(ctx context.Context, id string) (bool, error) {
+func (service *Docker) ContainerExists(ctx context.Context, id string) (bool, error) {
 	_, err := withDockerClient(func(client *dockerClient.Client) (*struct{}, error) {
 		_, err := client.ContainerInspect(ctx, id)
 		return nil, err
@@ -104,6 +106,27 @@ func (service *Docker) IsContainerExists(ctx context.Context, id string) (bool, 
 	}
 
 	return false, err
+}
+
+func (service *Docker) GetContainerLogs(ctx context.Context, id string) (string, error) {
+	return withDockerClient(func(client *dockerClient.Client) (string, error) {
+		r, err := client.ContainerLogs(ctx, id, dockerContainer.LogsOptions{
+			ShowStdout: true,
+			ShowStderr: true,
+		})
+
+		if err != nil {
+			return "", err
+		}
+
+		defer func() {
+			_ = r.Close()
+		}()
+
+		var res strings.Builder
+		_, err = io.Copy(&res, r)
+		return res.String(), err
+	})
 }
 
 func (service *Docker) EnsureContainer(ctx context.Context, id string) (string, error) {

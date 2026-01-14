@@ -32,7 +32,7 @@ func (service *Service) ScanContainers(ctx context.Context, w io.Writer) error {
 			continue
 		}
 
-		ok, err := service.Docker.IsContainerExists(ctx, user.Container)
+		ok, err := service.Docker.ContainerExists(ctx, user.Container)
 		if err != nil {
 			errs = append(errs, err)
 			continue

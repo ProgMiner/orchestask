@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -52,6 +54,8 @@ func parseArgs() error {
 		_, _ = fmt.Fprintln(w, "\tCheck the Docker containers existence")
 		_, _ = fmt.Fprintln(w, "  stop-containers")
 		_, _ = fmt.Fprintln(w, "\tStop all containers attached to the users")
+		_, _ = fmt.Fprintln(w, "  csv [filename]")
+		_, _ = fmt.Fprintln(w, "\tMake a summary CSV file")
 		_, _ = fmt.Fprintln(w, "\nOptions:")
 		flag.PrintDefaults()
 	}
@@ -136,7 +140,92 @@ func commandStopContainers(ctx context.Context, service *service.Service) error 
 	return nil
 }
 
-func runCommand(ctx context.Context, service *service.Service) (int, string) {
+// TODO: somehow make a multi-page ODS instead of this piece of shit
+func commandCSV(ctx context.Context, storage *storage.Storage, service *service.Service) error {
+	path := flag.Arg(1)
+
+	if path == "" {
+		path = "./summary.csv"
+	}
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("unable to create file: %w", err)
+	}
+
+	defer func() {
+		_ = file.Close()
+	}()
+
+	users, err := service.User.GetAll()
+	if err != nil {
+		return fmt.Errorf("unable to get users: %w", err)
+	}
+
+	sshUsers, err := storage.SSHUser.FindAll()
+	if err != nil {
+		return fmt.Errorf("unable to get SSH users: %w", err)
+	}
+
+	sshUsersSummary := make(map[int64]int, len(users))
+	for _, sshUser := range sshUsers {
+		if sshUser.TG == 0 {
+			fmt.Printf("SSH user with public key %s haven't attached a TG account\n", sshUser.PKey)
+			continue
+		}
+
+		sshUsersSummary[sshUser.TG]++
+	}
+
+	csvWriter := csv.NewWriter(file)
+	csvWriterErrs := []error{}
+
+	writeCSV := func(values ...string) {
+		csvWriterErrs = append(csvWriterErrs, csvWriter.Write(values))
+
+		csvWriter.Flush()
+		csvWriterErrs = append(csvWriterErrs, csvWriter.Error())
+	}
+
+	writeCSV(
+		"ID",
+		"Username",
+		"First name",
+		"Last name",
+		"SSH users",
+		"Container image",
+		"Container",
+		"Container logs",
+	)
+
+	for _, user := range users {
+		containerLogs := ""
+
+		if user.Container != "" {
+			res, err := service.Docker.GetContainerLogs(ctx, user.Container)
+			if err != nil {
+				return fmt.Errorf("unable to get container logs of user %d: %w", user.ID, err)
+			}
+
+			containerLogs = res
+		}
+
+		writeCSV(
+			fmt.Sprintf("%d", user.ID),
+			user.Username,
+			user.FirstName,
+			user.LastName,
+			fmt.Sprintf("%d", sshUsersSummary[user.ID]),
+			user.ContainerImage,
+			user.Container,
+			containerLogs,
+		)
+	}
+
+	return errors.Join(csvWriterErrs...)
+}
+
+func runCommand(ctx context.Context, storage *storage.Storage, service *service.Service) (int, string) {
 	var err error
 
 	switch flag.Arg(0) {
@@ -145,6 +234,9 @@ func runCommand(ctx context.Context, service *service.Service) (int, string) {
 
 	case "stop-containers":
 		err = commandStopContainers(ctx, service)
+
+	case "csv":
+		err = commandCSV(ctx, storage, service)
 
 	default:
 		flag.Usage()
@@ -191,7 +283,7 @@ func _main() (int, string) {
 		return storageInitExit, fmt.Sprintf("Unable to initialize services: %v", err)
 	}
 
-	return runCommand(ctx, service)
+	return runCommand(ctx, storage, service)
 }
 
 func main() {

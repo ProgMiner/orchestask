@@ -35,19 +35,6 @@ func (storage *BaseStorage) SSHUser() (*SSHUser, error) {
 	return user, nil
 }
 
-func (storage *SSHUser) FindByPKey(pkey string) (*model.SSHUser, error) {
-	id, ok := util.Synchronized(&storage.indexMutex, func() (model.ID, bool) {
-		id, ok := storage.sshPKeyIndex[pkey]
-		return id, ok
-	})
-
-	if !ok {
-		return nil, nil
-	}
-
-	return storage.readUser(id)
-}
-
 func (storage *SSHUser) ExistsByID(id model.ID) (bool, error) {
 	return util.Synchronized(&storage.indexMutex, func() (bool, error) {
 		_, ok := storage.idIndex[id]
@@ -61,6 +48,43 @@ func (storage *SSHUser) FindByID(id model.ID) (*model.SSHUser, error) {
 	}
 
 	return storage.readUser(id)
+}
+
+func (storage *SSHUser) FindByPKey(pkey string) (*model.SSHUser, error) {
+	id, ok := util.Synchronized(&storage.indexMutex, func() (model.ID, bool) {
+		id, ok := storage.sshPKeyIndex[pkey]
+		return id, ok
+	})
+
+	if !ok {
+		return nil, nil
+	}
+
+	return storage.readUser(id)
+}
+
+func (storage *SSHUser) FindAll() ([]*model.SSHUser, error) {
+	userIDs, _ := util.Synchronized(&storage.indexMutex, func() ([]model.ID, *struct{}) {
+		userIDs := make([]model.ID, 0, len(storage.idIndex))
+
+		for id := range storage.idIndex {
+			userIDs = append(userIDs, id)
+		}
+
+		return userIDs, nil
+	})
+
+	users := make([]*model.SSHUser, 0, len(userIDs))
+	for _, id := range userIDs {
+		user, err := storage.readUser(id)
+		if err != nil {
+			return nil, err
+		}
+
+		users = append(users, user)
+	}
+
+	return users, nil
 }
 
 func (storage *SSHUser) generateID() model.ID {
