@@ -12,11 +12,11 @@ import (
 )
 
 import (
-	dockerContainer "github.com/docker/docker/api/types/container"
-	// dockerNetwork "github.com/docker/docker/api/types/network"
 	dockerErr "github.com/containerd/errdefs"
+	dockerContainer "github.com/docker/docker/api/types/container"
 	dockerFilter "github.com/docker/docker/api/types/filters"
 	dockerImage "github.com/docker/docker/api/types/image"
+	// dockerNetwork "github.com/docker/docker/api/types/network"
 	dockerClient "github.com/docker/docker/client"
 )
 
@@ -192,6 +192,7 @@ func findDockerImages(ctx context.Context, image string) ([]string, error) {
 		for _, img := range res {
 			if len(img.RepoTags) == 0 {
 				fmt.Fprintf(os.Stderr, "Skipping image %s without tags\n", img.ID)
+				continue
 			}
 
 			images = append(images, img.RepoTags[0])
