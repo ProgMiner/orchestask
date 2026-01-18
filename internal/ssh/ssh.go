@@ -11,16 +11,12 @@ import (
 	"sync"
 	"syscall"
 	"time"
-)
 
-import (
-	"golang.org/x/crypto/ssh"
-)
-
-import (
 	"bypm.ru/orchestask/internal/model"
 	"bypm.ru/orchestask/internal/service"
 	"bypm.ru/orchestask/internal/util"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -105,15 +101,16 @@ func (srv *SSHServer) Run(ctx context.Context) error {
 
 	fmt.Printf("SSH server started on %s\n", srv.listener.Addr().String())
 
-	var wg sync.WaitGroup
 	ctx, cancel := context.WithCancel(ctx)
 	ctx = util.WithLoggingScope(ctx, "SSH")
+
+	wg, wgCtx := errgroup.WithContext(ctx)
 
 	defer func() {
 		_ = srv.Close()
 		cancel()
 
-		wg.Wait()
+		_ = wg.Wait()
 	}()
 
 	for {
@@ -127,21 +124,21 @@ func (srv *SSHServer) Run(ctx context.Context) error {
 			}
 		}
 
-		wg.Add(1)
-		go srv.handleConn(ctx, &wg, conn)
+		wg.Go(func() error {
+			srv.handleConn(wgCtx, conn)
+			return nil
+		})
 	}
 }
 
-func (srv *SSHServer) handleConn(ctx context.Context, wg *sync.WaitGroup, conn net.Conn) {
-	defer wg.Done()
-
+func (srv *SSHServer) handleConn(ctx context.Context, conn net.Conn) {
 	ctx = util.WithLoggingScope(ctx, conn.RemoteAddr().String())
-	if err := srv._handleConn(ctx, wg, conn); err != nil {
+	if err := srv._handleConn(ctx, conn); err != nil {
 		util.Log(ctx, "SSH communication error: %v", err)
 	}
 }
 
-func (srv *SSHServer) _handleConn(ctx context.Context, wg *sync.WaitGroup, conn net.Conn) (res error) {
+func (srv *SSHServer) _handleConn(ctx context.Context, conn net.Conn) (res error) {
 	defer func() {
 		if err := recover(); err != nil {
 			res = fmt.Errorf("panic: %v", err)
@@ -161,16 +158,16 @@ func (srv *SSHServer) _handleConn(ctx context.Context, wg *sync.WaitGroup, conn 
 		return fmt.Errorf("unable to initialize connection: %w", err)
 	}
 
-	if err := srv.handleSSHConn(ctx, wg, mySSHConn); err != nil {
+	if err := srv.handleSSHConn(ctx, mySSHConn); err != nil {
 		_, _ = fmt.Fprint(mySSHConn.session.Stderr(), "internal server error\r\n")
-		mySSHConn.rejectAll(wg)
+		mySSHConn.rejectAll(ctx)
 		return err
 	}
 
 	return
 }
 
-func (srv *SSHServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, conn *sshConn) error {
+func (srv *SSHServer) handleSSHConn(ctx context.Context, conn *sshConn) error {
 	// TODO: add some kind of transaction on user...
 
 	username := conn.conn.User()
@@ -271,7 +268,7 @@ func (srv *SSHServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 			continue
 		}
 
-		return srv.redirectConn(conn, clientConn, clientChans, clientReqs)
+		return srv.redirectConn(ctx, conn, clientConn, clientChans, clientReqs)
 	}
 
 	return fmt.Errorf("unable to connect container by SSH: %w", connectionErr)
@@ -349,7 +346,7 @@ loop:
 	return res, nil
 }
 
-func (conn *sshConn) rejectAll(wg *sync.WaitGroup) {
+func (conn *sshConn) rejectAll(ctx context.Context) {
 	for _, ch := range conn.forwardChans {
 		_ = ch.Reject(ssh.ConnectionFailed, "internal server error")
 	}
@@ -360,29 +357,31 @@ func (conn *sshConn) rejectAll(wg *sync.WaitGroup) {
 		}
 	}
 
-	wg.Add(3)
+	wg, _ := errgroup.WithContext(ctx)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() error {
 		ssh.DiscardRequests(conn.sessionReqs)
-	}()
+		return nil
+	})
 
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() error {
 		for ch := range conn.remainingChans {
 			_ = ch.Reject(ssh.ConnectionFailed, "internal server error")
 		}
-	}()
+		return nil
+	})
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() error {
 		ssh.DiscardRequests(conn.remainingReqs)
-	}()
+		return nil
+	})
+
+	_ = wg.Wait()
 }
 
 // TODO: error collecting
 func (srv *SSHServer) redirectConn(
+	ctx context.Context,
 	conn *sshConn,
 	connTo ssh.Conn,
 	chans <-chan ssh.NewChannel,
@@ -393,54 +392,48 @@ func (srv *SSHServer) redirectConn(
 		return err
 	}
 
-	var wg sync.WaitGroup
+	wg, wgCtx := errgroup.WithContext(ctx)
 
-	srv.redirectChan(&wg, session, conn.session, sessionReqs, conn.sessionReqs)
+	srv.redirectChan(ctx, session, conn.session, sessionReqs, conn.sessionReqs)
 
-	wg.Add(4)
-
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() error {
 		for ch := range conn.remainingChans {
-			_ = srv.redirectNewChan(&wg, ch, connTo)
+			_ = srv.redirectNewChan(wgCtx, ch, connTo)
 		}
 
 		_ = connTo.Close()
-	}()
+		return nil
+	})
 
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() error {
 		for ch := range chans {
-			_ = srv.redirectNewChan(&wg, ch, conn.conn)
+			_ = srv.redirectNewChan(wgCtx, ch, conn.conn)
 		}
 
 		_ = conn.conn.Close()
-	}()
+		return nil
+	})
 
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() error {
 		for r := range conn.remainingReqs {
 			_ = srv.redirectReq(r, connTo.SendRequest)
 		}
 
 		_ = connTo.Close()
-	}()
+		return nil
+	})
 
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() error {
 		for r := range reqs {
 			_ = srv.redirectReq(r, conn.conn.SendRequest)
 		}
 
 		_ = conn.conn.Close()
-	}()
+		return nil
+	})
 
 	for _, ch := range conn.forwardChans {
-		if err := srv.redirectNewChan(&wg, ch, connTo); err != nil {
+		if err := srv.redirectNewChan(wgCtx, ch, connTo); err != nil {
 			return err
 		}
 	}
@@ -451,11 +444,11 @@ func (srv *SSHServer) redirectConn(
 		}
 	}
 
-	wg.Wait()
+	_ = wg.Wait()
 	return nil
 }
 
-func (srv *SSHServer) redirectNewChan(wg *sync.WaitGroup, newChan ssh.NewChannel, conn ssh.Conn) error {
+func (srv *SSHServer) redirectNewChan(ctx context.Context, newChan ssh.NewChannel, conn ssh.Conn) error {
 	chan1, reqs1, err := conn.OpenChannel(newChan.ChannelType(), newChan.ExtraData())
 	if err != nil {
 		_ = newChan.Reject(ssh.ConnectionFailed, "unable to connect container")
@@ -471,60 +464,56 @@ func (srv *SSHServer) redirectNewChan(wg *sync.WaitGroup, newChan ssh.NewChannel
 	srv.addResource(chan1)
 	srv.addResource(chan2)
 
-	srv.redirectChan(wg, chan1, chan2, reqs1, reqs2)
+	srv.redirectChan(ctx, chan1, chan2, reqs1, reqs2)
 	return nil
 }
 
 func (srv *SSHServer) redirectChan(
-	wg *sync.WaitGroup,
+	ctx context.Context,
 	chan1, chan2 ssh.Channel,
 	reqs1, reqs2 <-chan *ssh.Request,
 ) {
-	wg.Add(2)
+	wg, _ := errgroup.WithContext(ctx)
 
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() error {
 		defer func() {
 			_ = chan2.Close()
 		}()
 
 		srv.redirectChanReqs(reqs1, chan2)
-	}()
+		return nil
+	})
 
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() error {
 		defer func() {
 			_ = chan1.Close()
 		}()
 
 		srv.redirectChanReqs(reqs2, chan1)
-	}()
+		return nil
+	})
 
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
+	wg.Go(func() error {
 		_, _ = io.Copy(chan1, chan2)
-	}()
+		return nil
+	})
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() error {
 		_, _ = io.Copy(chan2, chan1)
-	}()
+		return nil
+	})
 
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
+	wg.Go(func() error {
 		_, _ = io.Copy(chan1.Stderr(), chan2.Stderr())
-	}()
+		return nil
+	})
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() error {
 		_, _ = io.Copy(chan2.Stderr(), chan1.Stderr())
-	}()
+		return nil
+	})
+
+	_ = wg.Wait()
 }
 
 func (srv *SSHServer) redirectChanReqs(
