@@ -5,3 +5,7 @@
 /id_rsa*
 /orchestask
 /orchadmin
+
+# IDE
+/.idea
+/.vscode

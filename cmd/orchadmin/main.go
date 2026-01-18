@@ -9,14 +9,12 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
-)
 
-import (
 	"bypm.ru/orchestask/internal/model"
 	"bypm.ru/orchestask/internal/service"
 	"bypm.ru/orchestask/internal/storage"
 	"bypm.ru/orchestask/internal/util"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -94,7 +92,7 @@ func commandStopContainers(ctx context.Context, service *service.Service) error 
 		return fmt.Errorf("unable to get users: %w", err)
 	}
 
-	var wg sync.WaitGroup
+	wg, wgCtx := errgroup.WithContext(ctx)
 
 	type userError struct {
 		u *model.User
@@ -111,17 +109,15 @@ func commandStopContainers(ctx context.Context, service *service.Service) error 
 			continue
 		}
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			err := service.Docker.StopContainer(ctx, user.Container)
+		wg.Go(func() error {
+			err := service.Docker.StopContainer(wgCtx, user.Container)
 			ueChan <- userError{user, err}
-		}()
+			return nil
+		})
 	}
 
 	go func() {
-		wg.Wait()
+		_ = wg.Wait()
 		close(ueChan)
 	}()
 
