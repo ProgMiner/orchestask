@@ -14,7 +14,7 @@ import (
 	"bypm.ru/orchestask/internal/service"
 	"bypm.ru/orchestask/internal/storage"
 	"bypm.ru/orchestask/internal/util"
-	"golang.org/x/sync/errgroup"
+	"bypm.ru/orchestask/internal/util/errgroup"
 )
 
 const (
@@ -95,14 +95,13 @@ func commandStopContainers(ctx context.Context, service *service.Service) error 
 	wg, wgCtx := errgroup.WithContext(ctx)
 
 	type userError struct {
+		error
 		u *model.User
-		e error
 	}
 
 	var statusLine strings.Builder
 	multiWriter := io.MultiWriter(&statusLine, os.Stdout)
 
-	ueChan := make(chan userError)
 	for _, user := range users {
 		if user.Container == "" {
 			_, _ = fmt.Fprint(multiWriter, ".")
@@ -111,29 +110,31 @@ func commandStopContainers(ctx context.Context, service *service.Service) error 
 
 		wg.Go(func() error {
 			err := service.Docker.StopContainer(wgCtx, user.Container)
-			ueChan <- userError{user, err}
-			return nil
+			return userError{error: err, u: user}
 		})
 	}
 
-	go func() {
-		_ = wg.Wait()
-		close(ueChan)
-	}()
+	wgErr := wg.Wait()
+	errorsArray := util.Unwrap(wgErr)
 
-	for ue := range ueChan {
-		if ue.e == nil {
+	for _, rawErr := range errorsArray {
+		var ue userError
+		if !errors.As(rawErr, &ue) {
+			fmt.Printf("\nUnexpected error: %v\n", rawErr)
+			continue
+		}
+		if ue.error == nil {
 			_, _ = fmt.Fprint(multiWriter, "+")
 		} else {
 			fmt.Printf("\r%s", strings.Repeat(" ", statusLine.Len()))
-			fmt.Printf("User %d: %v\n", ue.u.ID, ue.e)
+			fmt.Printf("User %d: %v\n", ue.u.ID, ue.error)
 			fmt.Printf("%s", statusLine.String())
 			_, _ = fmt.Fprint(multiWriter, "-")
 		}
 	}
 
 	fmt.Println("")
-	return nil
+	return wgErr
 }
 
 // TODO: somehow make a multi-page ODS instead of this piece of shit

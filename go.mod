@@ -8,7 +8,6 @@ require (
 	github.com/go-telegram/bot v1.17.0
 	github.com/google/uuid v1.6.0
 	golang.org/x/crypto v0.42.0
-	golang.org/x/sync v0.19.0
 )
 
 require (
