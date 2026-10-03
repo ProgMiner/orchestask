@@ -10,7 +10,6 @@ import (
 )
 
 import (
-	"bypm.ru/orchestask/internal/model"
 	"bypm.ru/orchestask/internal/service"
 	"bypm.ru/orchestask/internal/util"
 )
@@ -21,12 +20,6 @@ type Server struct {
 	mux      *http.ServeMux
 }
 
-type sshUserResponse struct {
-	ID       string `json:"id"`
-	PKey     string `json:"pkey"`
-	Approved bool   `json:"approved"`
-}
-
 func MakeAPIServer(service *service.Service, host string) (*Server, error) {
 	listener, err := net.Listen("tcp", host)
 	if err != nil {
@@ -34,9 +27,11 @@ func MakeAPIServer(service *service.Service, host string) (*Server, error) {
 	}
 
 	srv := &Server{service: service, listener: listener, mux: http.NewServeMux()}
+	srv.mux.HandleFunc("GET /ssh-users", srv.listSSHUsers)
+	srv.mux.HandleFunc("GET /ssh-users/pending", srv.pendingSSHUsers)
+	srv.mux.HandleFunc("POST /ssh-users/{sshUserID}/approve", srv.approveSSHUser)
 	srv.mux.HandleFunc("GET /users", srv.listUsers)
-	srv.mux.HandleFunc("GET /users/pending", srv.pendingUsers)
-	srv.mux.HandleFunc("POST /users/{id}/approve", srv.approveUser)
+	srv.mux.HandleFunc("PUT /users/{userID}", srv.updateUser)
 	return srv, nil
 }
 
@@ -61,82 +56,6 @@ func (srv *Server) Run(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func (srv *Server) listUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := srv.service.User.ListSSHUsers()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	response, err := srv.makeSSHUsersResponse(users)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, response)
-}
-
-func (srv *Server) pendingUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := srv.service.User.ListSSHUsers()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	response, err := srv.makeSSHUsersResponse(users)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	pending := make([]sshUserResponse, 0, len(response))
-	for _, user := range response {
-		if !user.Approved {
-			pending = append(pending, user)
-		}
-	}
-
-	writeJSON(w, http.StatusOK, pending)
-}
-
-func (srv *Server) makeSSHUsersResponse(users []*model.SSHUser) ([]sshUserResponse, error) {
-	response := make([]sshUserResponse, 0, len(users))
-
-	for _, user := range users {
-		id, err := model.IDToString(user.ID)
-		if err != nil {
-			return nil, err
-		}
-
-		response = append(response, sshUserResponse{ID: id, PKey: user.PKey, Approved: user.TG != 0})
-	}
-
-	return response, nil
-}
-
-func (srv *Server) approveUser(w http.ResponseWriter, r *http.Request) {
-	id := model.StringToID(r.PathValue("id"))
-	_, err := srv.service.User.Approve(id)
-
-	if errors.Is(err, service.ErrNoUser) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
-		return
-	}
-
-	if errors.Is(err, service.ErrAlreadyApproved) {
-		writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "approved": true})
-		return
-	}
-
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "approved": true})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

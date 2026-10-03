@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"time"
 )
 
 import (
@@ -17,20 +18,22 @@ import (
 type User struct {
 	storage *storage.Storage
 
-	waiters      map[model.ID]chan struct{}
+	waiters      map[model.ID]map[chan struct{}]struct{}
 	waitersMutex sync.Mutex
 	approveMutex sync.Mutex
+	userMutex    sync.Mutex
 }
 
 var (
 	ErrNoUser          = errors.New("user not found")
 	ErrAlreadyApproved = errors.New("user is already approved")
+	ErrNotApproved     = errors.New("user is not approved")
 )
 
 func NewUser(storage *storage.Storage) (*User, error) {
 	service := &User{
 		storage: storage,
-		waiters: make(map[model.ID]chan struct{}),
+		waiters: make(map[model.ID]map[chan struct{}]struct{}),
 	}
 
 	return service, nil
@@ -41,7 +44,7 @@ func (service *User) Authenticate(pkey string) (*model.SSHUser, error) {
 }
 
 func (service *User) Register(pkey string) (*model.SSHUser, error) {
-	return service.storage.SSHUser.Save(&model.SSHUser{PKey: pkey})
+	return service.storage.SSHUser.Save(&model.SSHUser{PKey: pkey, CreatedAt: time.Now().UTC()})
 }
 
 func (service *User) GetByID(id int64) (*model.User, error) {
@@ -62,15 +65,17 @@ func (service *User) GetAll() ([]*model.User, error) {
 }
 
 func (service *User) UpdateContainer(id int64, image, container string) (*model.User, error) {
-	user, err := service.GetByID(id)
-	if err != nil {
-		return nil, err
-	}
+	return util.Synchronized(&service.userMutex, func() (*model.User, error) {
+		user, err := service.GetByID(id)
+		if err != nil {
+			return nil, err
+		}
 
-	user.ContainerImage = image
-	user.Container = container
+		user.ContainerImage = image
+		user.Container = container
 
-	return service.storage.User.Save(user)
+		return service.storage.User.Save(user)
+	})
 }
 
 func (service *User) WaitApproved(ctx context.Context, id model.ID) (*model.SSHUser, error) {
@@ -82,15 +87,22 @@ func (service *User) WaitApproved(ctx context.Context, id model.ID) (*model.SSHU
 		return nil, err
 	}
 
-	waiter, _ := util.Synchronized(&service.waitersMutex, func() (<-chan struct{}, struct{}) {
-		waiter, ok := service.waiters[id]
+	waiter, _ := util.Synchronized(&service.waitersMutex, func() (chan struct{}, struct{}) {
+		waiter := make(chan struct{})
+		if service.waiters[id] == nil {
+			service.waiters[id] = make(map[chan struct{}]struct{})
+		}
+		service.waiters[id][waiter] = struct{}{}
+		return waiter, struct{}{}
+	})
 
-		if !ok {
-			waiter = make(chan struct{})
-			service.waiters[id] = waiter
+	defer util.Synchronized(&service.waitersMutex, func() (struct{}, struct{}) {
+		delete(service.waiters[id], waiter)
+		if len(service.waiters[id]) == 0 {
+			delete(service.waiters, id)
 		}
 
-		return waiter, struct{}{}
+		return struct{}{}, struct{}{}
 	})
 
 	// The approval could happen between the existence check above and the
@@ -113,76 +125,149 @@ func (service *User) WaitApproved(ctx context.Context, id model.ID) (*model.SSHU
 	}
 }
 
-func (service *User) Approve(sshID model.ID) (*model.User, error) {
-	service.approveMutex.Lock()
-	defer service.approveMutex.Unlock()
+func (service *User) GetSSHUser(id model.ID) (*model.SSHUser, error) {
+	return service.storage.SSHUser.FindByID(id)
+}
 
-	sshUser, err := service.storage.SSHUser.FindByID(sshID)
-	if err != nil {
-		return nil, err
-	}
-
-	if sshUser == nil {
-		return nil, ErrNoUser
-	}
-
-	if sshUser.TG != 0 {
-		return nil, ErrAlreadyApproved
-	}
-
-	var userID int64
-	for range 100 {
-		userID = rand.Int63()
-		if userID == 0 {
-			continue
-		}
-
-		exists, err := service.storage.User.ExistsByID(userID)
+func (service *User) UpdateName(userID int64, firstName, lastName string) (*model.User, error) {
+	return util.Synchronized(&service.userMutex, func() (*model.User, error) {
+		user, err := service.GetByID(userID)
 		if err != nil {
 			return nil, err
 		}
 
-		if !exists {
-			break
-		}
-	}
+		user.FirstName = firstName
+		user.LastName = lastName
 
-	if userID == 0 {
-		return nil, errors.New("unable to generate a unique user ID")
-	}
+		return service.storage.User.Save(user)
+	})
+}
 
-	if exists, err := service.storage.User.ExistsByID(userID); err != nil {
-		return nil, err
-	} else if exists {
-		return nil, errors.New("unable to generate a unique user ID")
-	}
-
-	user, err := service.storage.User.Save(&model.User{ID: userID})
-	if err != nil {
-		return nil, fmt.Errorf("unable to create user: %w", err)
-	}
-
-	sshUser.TG = userID
-	sshUser, err = service.storage.SSHUser.Save(sshUser)
-	if err != nil {
-		return nil, err
-	}
-
-	waiter, _ := util.Synchronized(&service.waitersMutex, func() (chan struct{}, *struct{}) {
-		waiter, ok := service.waiters[sshUser.ID]
-
-		if ok {
-			delete(service.waiters, sshUser.ID)
+func (service *User) Approve(sshID model.ID, firstName, lastName string) (*model.User, error) {
+	return util.Synchronized(&service.approveMutex, func() (*model.User, error) {
+		sshUser, err := service.storage.SSHUser.FindByID(sshID)
+		if err != nil {
+			return nil, err
 		}
 
-		return waiter, nil
+		if sshUser == nil {
+			return nil, ErrNoUser
+		}
+
+		if sshUser.TG != 0 {
+			return nil, ErrAlreadyApproved
+		}
+
+		var userID int64
+		for range 100 {
+			userID = rand.Int63()
+			if userID == 0 {
+				continue
+			}
+
+			exists, err := service.storage.User.ExistsByID(userID)
+			if err != nil {
+				return nil, err
+			}
+
+			if !exists {
+				break
+			}
+		}
+
+		if userID == 0 {
+			return nil, errors.New("unable to generate a unique user ID")
+		}
+
+		if exists, err := service.storage.User.ExistsByID(userID); err != nil {
+			return nil, err
+		} else if exists {
+			return nil, errors.New("unable to generate a unique user ID")
+		}
+
+		user, err := service.storage.User.Save(&model.User{ID: userID, FirstName: firstName, LastName: lastName})
+		if err != nil {
+			return nil, fmt.Errorf("unable to create user: %w", err)
+		}
+
+		sshUser.TG = userID
+		sshUser, err = service.storage.SSHUser.Save(sshUser)
+		if err != nil {
+			return nil, err
+		}
+
+		service.notifyApproved(sshUser.ID)
+
+		return user, nil
+	})
+}
+
+func (service *User) ApproveExisting(sshID model.ID, userID int64, firstName, lastName string) (*model.User, error) {
+	return util.Synchronized(&service.approveMutex, func() (*model.User, error) {
+		sshUser, err := service.storage.SSHUser.FindByID(sshID)
+		if err != nil {
+			return nil, err
+		}
+
+		if sshUser == nil {
+			return nil, ErrNoUser
+		}
+
+		if sshUser.TG != 0 {
+			return nil, ErrAlreadyApproved
+		}
+
+		user, err := util.Synchronized(&service.userMutex, func() (*model.User, error) {
+			user, err := service.GetByID(userID)
+			if err != nil {
+				return nil, err
+			}
+
+			if firstName != "" || lastName != "" {
+				if firstName != "" {
+					user.FirstName = firstName
+				}
+				if lastName != "" {
+					user.LastName = lastName
+				}
+
+				return service.storage.User.Save(user)
+			}
+
+			return user, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		sshUser.TG = user.ID
+		sshUser, err = service.storage.SSHUser.Save(sshUser)
+		if err != nil {
+			return nil, err
+		}
+
+		service.notifyApproved(sshUser.ID)
+
+		return user, nil
+	})
+}
+
+func (service *User) notifyApproved(id model.ID) {
+	waiters, _ := util.Synchronized(&service.waitersMutex, func() ([]chan struct{}, struct{}) {
+		waiters := service.waiters[id]
+		delete(service.waiters, id)
+
+		result := make([]chan struct{}, 0, len(waiters))
+		for waiter := range waiters {
+			result = append(result, waiter)
+		}
+
+		return result, struct{}{}
 	})
 
-	if waiter != nil {
+	for _, waiter := range waiters {
 		close(waiter)
 	}
-
-	return user, nil
 }
 
 func (service *User) ListSSHUsers() ([]*model.SSHUser, error) {
