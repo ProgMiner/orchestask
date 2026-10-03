@@ -1,5 +1,5 @@
 
-CMDS = orchestask orchadmin
+CMDS = orchestask orchadmin orchman
 
 .PHONY: all clean
 .SUFFIXES:
