@@ -5,7 +5,6 @@ go 1.24.6
 require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.4.0+incompatible
-	github.com/go-telegram/bot v1.17.0
 	github.com/google/uuid v1.6.0
 	golang.org/x/crypto v0.42.0
 )

@@ -8,6 +8,7 @@ import (
 )
 
 import (
+	"bypm.ru/orchestask/internal/api"
 	"bypm.ru/orchestask/internal/service"
 	"bypm.ru/orchestask/internal/ssh"
 	"bypm.ru/orchestask/internal/storage"
@@ -20,20 +21,18 @@ const (
 	storageInitExit
 	sshInitExit
 	sshServerExit
+	httpInitExit
 )
 
 const (
 	storageBaseDefault = "./data"
 	storageBaseEnv     = "STORAGE_PATH"
 
-	// tgHostDefault = ""
-	// tgHostEnv     = "TG_HOST"
-
-	tgApiDefault = ""
-	tgApiEnv     = "TG_API"
-
 	sshHostDefault = ":22"
 	sshHostEnv     = "SSH_HOST"
+
+	httpHostDefault = "127.0.0.1:8080"
+	httpHostEnv     = "HTTP_HOST"
 
 	sshKeyFileDefault = "./id_rsa"
 	sshKeyFileEnv     = "SSH_KEY_FILE"
@@ -46,11 +45,9 @@ const (
 )
 
 var (
-	storageBase = flag.String("storage", util.GetenvOr(storageBaseEnv, storageBaseDefault), "storage base path")
-	// TODO: support TG API webhook
-	// tgHost = flag.String("tgHost", util.GetenvOr(tgHostEnv, tgHostDefault), "Telegram webhook server address")
-	tgApi              = flag.String("tgApi", util.GetenvOr(tgApiEnv, tgApiDefault), "Telegram bot API key")
+	storageBase        = flag.String("storage", util.GetenvOr(storageBaseEnv, storageBaseDefault), "storage base path")
 	sshHost            = flag.String("sshHost", util.GetenvOr(sshHostEnv, sshHostDefault), "SSH server address")
+	httpHost           = flag.String("httpHost", util.GetenvOr(httpHostEnv, httpHostDefault), "REST API server address")
 	sshKeyFile         = flag.String("sshKey", util.GetenvOr(sshKeyFileEnv, sshKeyFileDefault), "SSH key file")
 	dockerImage        = flag.String("dockerImage", util.GetenvOr(dockerImageEnv, dockerImageDefault), "Task Docker image")
 	dockerImageSSHUser = flag.String("dockerImageSSHUser", util.GetenvOr(dockerImageSSHUserEnv, dockerImageSSHUserDefault), "Task Docker image SSH username")
@@ -83,13 +80,6 @@ func makeService(ctx context.Context, storage *storage.Storage) (*service.Servic
 		User:   user,
 		Docker: docker,
 	}
-
-	tgBot, err := service.NewTGBot(*tgApi, storage, result)
-	if err != nil {
-		return nil, err
-	}
-
-	result.TGBot = tgBot
 
 	return result, nil
 }
@@ -127,12 +117,22 @@ func _main() (int, string) {
 		return storageInitExit, fmt.Sprintf("Unable to initialize services: %v", err)
 	}
 
+	apiServer, err := api.MakeAPIServer(service, *httpHost)
+	if err != nil {
+		return httpInitExit, fmt.Sprintf("Unable to initialize API server: %v", err)
+	}
+
 	sshServer, err := ssh.MakeSSHServer(service, *sshHost, *sshKeyFile, *dockerImageSSHUser)
 	if err != nil {
 		return sshInitExit, fmt.Sprintf("Unable to initialize SSH server: %v", err)
 	}
 
-	service.TGBot.Run(ctx)
+	go func() {
+		if err := apiServer.Run(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "API server error: %v\n", err)
+			cancel()
+		}
+	}()
 
 	if err := sshServer.Run(ctx); err != nil {
 		return sshServerExit, fmt.Sprintf("SSH server error: %v", err)

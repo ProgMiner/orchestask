@@ -18,7 +18,6 @@ import (
 )
 
 import (
-	"bypm.ru/orchestask/internal/model"
 	"bypm.ru/orchestask/internal/service"
 	"bypm.ru/orchestask/internal/util"
 )
@@ -193,33 +192,17 @@ func (srv *SSHServer) handleSSHConn(ctx context.Context, wg *sync.WaitGroup, con
 	}
 
 	if sshUser.TG == 0 {
-		tgLink, err := model.IDToString(sshUser.ID)
-		if err != nil {
-			return err
-		}
-
-		tgLink, err = srv.service.TGBot.MakeStartLink(ctx, tgLink)
-		if err != nil {
-			return fmt.Errorf("unable to generate TG link for %s: %w", sshUser.ID, err)
-		}
-
-		msg := "Seems like you haven't attached your Telegram account for now. " +
-			"To do that, follow the link:\r\n" +
-			"\t%s\r\n" +
-			"\r\n" +
-			"I will wait until you do that <(^_^)>\r\n"
-
-		_, _ = fmt.Fprintf(conn.session, msg, tgLink)
+		_, _ = fmt.Fprintf(conn.session, "Waiting for an administrator approval.\r\n")
 
 		sshUserID := sshUser.ID
-		sshUser, err = srv.service.User.WaitTGAttached(ctx, sshUserID)
+		sshUser, err = srv.service.User.WaitApproved(ctx, sshUserID)
 		if err != nil {
-			return fmt.Errorf("unable to wait for TG attach for %s: %w", sshUserID, err)
+			return fmt.Errorf("unable to wait for approval for %s: %w", sshUserID, err)
 		}
 
-		util.Log(ctx, "Attached SSH user %s to TG %d", sshUserID, sshUser.TG)
+		util.Log(ctx, "Approved SSH user %s", sshUserID)
 
-		_, _ = fmt.Fprint(conn.session, "Great!\r\n")
+		_, _ = fmt.Fprint(conn.session, "Approved!\r\n")
 	}
 
 	user, err := srv.service.User.GetByID(sshUser.TG)
